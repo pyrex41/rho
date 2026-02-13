@@ -2,3 +2,18 @@
 name = "rho-gui"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "rho-gui"
+path = "src/main.rs"
+
+[dependencies]
+rho-core = { path = "../rho-core" }
+rho-provider = { path = "../rho-provider" }
+rho-tools = { path = "../rho-tools" }
+anthropic-auth = { path = "../anthropic-auth" }
+iced = { version = "0.14", features = ["markdown", "highlighter", "tokio"] }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
