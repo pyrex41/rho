@@ -9,3 +9,4 @@ path = "src/bin/main.rs"
 
 [dependencies]
 thiserror = { workspace = true }
+serde_json = { workspace = true }

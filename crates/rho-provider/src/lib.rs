@@ -68,14 +68,20 @@ async fn do_stream_inner(
         &model.base_url
     };
 
-    let resp = client
+    let mut req = client
         .post(format!("{}/v1/messages", base_url))
-        .header("x-api-key", &options.api_key)
         .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
+        .header("content-type", "application/json");
+
+    if anthropic_auth::is_oauth_token(&options.api_key) {
+        req = req
+            .header("Authorization", format!("Bearer {}", options.api_key))
+            .header("anthropic-beta", "oauth-2025-04-20");
+    } else {
+        req = req.header("x-api-key", &options.api_key);
+    }
+
+    let resp = req.json(&body).send().await?;
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
