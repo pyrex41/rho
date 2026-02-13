@@ -1,0 +1,8 @@
+[package]
+name = "rho-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rho-cli"
+path = "src/main.rs"

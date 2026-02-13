@@ -1,0 +1,50 @@
+[workspace]
+members = [
+    "crates/rho-core",
+    "crates/rho-cli",
+    "crates/rho-hashline",
+    "crates/rho-lib",
+    "crates/rho-provider",
+    "crates/rho-tools",
+    "crates/anthropic-auth",
+    "crates/rho-gui",
+]
+resolver = "2"
+
+[package]
+name = "rho"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rho"
+path = "src/main.rs"
+
+[dependencies]
+rho-core = { path = "crates/rho-core" }
+rho-provider = { path = "crates/rho-provider" }
+rho-tools = { path = "crates/rho-tools" }
+anthropic-auth = { path = "crates/anthropic-auth" }
+tokio = { workspace = true }
+clap = { workspace = true }
+futures = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio-util = { workspace = true }
+serde_json = { workspace = true }
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream", "json"] }
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+futures = "0.3"
+tokio-util = "0.7"
+bytes = "1"
