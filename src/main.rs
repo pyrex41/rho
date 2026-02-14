@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,7 +12,7 @@ use rho_core::tool::AgentTool;
 use rho_core::types::*;
 
 #[derive(Parser)]
-#[command(name = "rho", about = "Minimal AI agent")]
+#[command(name = "rho", about = "AI coding agent with file tools")]
 struct Cli {
     /// The prompt to send to the agent
     prompt: String,
@@ -19,6 +20,22 @@ struct Cli {
     /// Model ID to use
     #[arg(long, default_value = "claude-sonnet-4-5-20250929")]
     model: String,
+
+    /// Thinking level (off, minimal, low, medium, high)
+    #[arg(long, default_value = "off")]
+    thinking: String,
+
+    /// Show thinking output on stderr
+    #[arg(long)]
+    show_thinking: bool,
+
+    /// Override API key (default: env var or keychain)
+    #[arg(long)]
+    api_key: Option<String>,
+
+    /// Working directory
+    #[arg(short = 'C', long)]
+    directory: Option<PathBuf>,
 }
 
 fn now_ms() -> u64 {
@@ -27,6 +44,30 @@ fn now_ms() -> u64 {
         .unwrap()
         .as_millis() as u64
 }
+
+fn parse_thinking(s: &str) -> ThinkingLevel {
+    match s.to_lowercase().as_str() {
+        "minimal" => ThinkingLevel::Minimal,
+        "low" => ThinkingLevel::Low,
+        "medium" => ThinkingLevel::Medium,
+        "high" => ThinkingLevel::High,
+        _ => ThinkingLevel::Off,
+    }
+}
+
+const SYSTEM_PROMPT: &str = "\
+You are a coding assistant with tools for reading, editing, searching files and running commands.
+
+Available tools:
+- read: Read a file (returns LINE:HASH|content format) or list a directory
+- write: Create or overwrite a file
+- edit: Edit a file using LINE:HASH anchors from read output, or text replacement
+- bash: Execute shell commands
+- grep: Search file contents with regex (returns matches with LINE:HASH|content format)
+- find: Find files by glob pattern (respects .gitignore)
+
+When editing files, first read them to get LINE:HASH references, then use edit with those anchors. \
+For new files, use write. For small changes, use edit. For running tests or builds, use bash.";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,19 +81,53 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let api_key = anthropic_auth::get_token().context("Failed to get API key")?;
+    let cwd = match &cli.directory {
+        Some(dir) => std::fs::canonicalize(dir)
+            .with_context(|| format!("Invalid directory: {}", dir.display()))?,
+        None => std::env::current_dir().context("Failed to get current directory")?,
+    };
+
+    let api_key = match &cli.api_key {
+        Some(key) => key.clone(),
+        None => anthropic_auth::get_token().context("Failed to get API key")?,
+    };
+
+    let thinking = parse_thinking(&cli.thinking);
 
     let model = Model {
         id: cli.model.clone(),
         name: cli.model.clone(),
         provider: "anthropic".into(),
         base_url: String::new(),
-        reasoning: cli.model.contains("opus"),
+        reasoning: cli.model.contains("opus") || thinking != ThinkingLevel::Off,
         context_window: 200_000,
-        max_tokens: 16_384,
+        max_tokens: if thinking != ThinkingLevel::Off {
+            16_384
+        } else {
+            8_192
+        },
     };
 
-    let tools: Vec<Arc<dyn AgentTool>> = vec![Arc::new(rho_tools::write::WriteTool::new())];
+    let skill_dirs = rho_core::skills::default_skill_dirs(&cwd);
+    let skills = rho_core::skills::discover_skills(&skill_dirs);
+    let system_prompt = if skills.is_empty() {
+        SYSTEM_PROMPT.to_string()
+    } else {
+        format!(
+            "{}\n\n{}",
+            SYSTEM_PROMPT,
+            rho_core::skills::format_skills_prompt(&skills)
+        )
+    };
+
+    let tools: Vec<Arc<dyn AgentTool>> = vec![
+        Arc::new(rho_tools::read::ReadTool::with_cwd(cwd.clone())),
+        Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone())),
+        Arc::new(rho_tools::edit::EditTool::with_cwd(cwd.clone())),
+        Arc::new(rho_tools::bash::BashTool::new(cwd.clone())),
+        Arc::new(rho_tools::grep::GrepTool::new(cwd.clone())),
+        Arc::new(rho_tools::find::FindTool::new(cwd)),
+    ];
 
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
@@ -69,14 +144,12 @@ async fn main() -> Result<()> {
         timestamp: now_ms(),
     }];
 
-    let system_prompt = "You are a helpful AI assistant. When asked to write files, use the 'write' tool with 'path' and 'content' parameters.".to_string();
-
     let config = AgentLoopConfig {
         model,
         api_key,
         system_prompt,
         tools,
-        thinking: ThinkingLevel::Off,
+        thinking,
         max_tokens: None,
         stream_fn: rho_provider::anthropic_stream_fn(),
         get_steering_messages: None,
@@ -86,6 +159,7 @@ async fn main() -> Result<()> {
     let mut consumer = agent_loop(prompts, config, cancel);
 
     let mut stdout = std::io::stdout();
+    let show_thinking = cli.show_thinking;
 
     while let Some(event) = consumer.next().await {
         match event {
@@ -95,19 +169,22 @@ async fn main() -> Result<()> {
                     stdout.flush().ok();
                 }
                 AssistantStreamEvent::ThinkingDelta { delta, .. } => {
-                    eprint!("{}", delta);
-                    std::io::stderr().flush().ok();
+                    if show_thinking {
+                        eprint!("{}", delta);
+                        std::io::stderr().flush().ok();
+                    }
                 }
                 _ => {}
             },
             AgentEvent::ToolExecutionStart {
                 tool_name, args, ..
             } => {
-                eprintln!(
-                    "\n[tool] {} {}",
-                    tool_name,
-                    serde_json::to_string(&args).unwrap_or_default()
-                );
+                let args_summary = match serde_json::to_string(&args) {
+                    Ok(s) if s.len() > 200 => format!("{}...", &s[..200]),
+                    Ok(s) => s,
+                    Err(_) => String::new(),
+                };
+                eprintln!("\n[tool:{}] {}", tool_name, args_summary);
             }
             AgentEvent::ToolExecutionEnd {
                 tool_name,
@@ -116,9 +193,9 @@ async fn main() -> Result<()> {
                 ..
             } => {
                 if is_error {
-                    eprintln!("[tool] {} ERROR: {:?}", tool_name, result.content);
+                    eprintln!("[tool:{}] ERROR: {:?}", tool_name, result.content);
                 } else {
-                    eprintln!("[tool] {} done", tool_name);
+                    eprintln!("[tool:{}] done", tool_name);
                 }
             }
             AgentEvent::AgentEnd { .. } => {

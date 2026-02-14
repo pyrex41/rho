@@ -8,8 +8,21 @@ rho-core = { path = "../rho-core" }
 rho-hashline = { path = "../rho-hashline" }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+similar = { workspace = true }
+grep-regex = "0.1"
+grep-searcher = "0.1"
+grep-matcher = "0.1"
+ignore = "0.4"
+globset = "0.4"
+portable-pty = "0.8"
+memmap2 = "0.9"
 
 [dev-dependencies]
 tempfile = "3"

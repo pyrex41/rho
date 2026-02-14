@@ -1,8 +1,10 @@
+pub mod oauth;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AuthError {
-    #[error("No API key found: set ANTHROPIC_API_KEY or log in with `claude`")]
+    #[error("No API key found: set ANTHROPIC_API_KEY or log in with `anthropic-auth login`")]
     NoCredentials,
     #[error("ANTHROPIC_API_KEY is empty")]
     EmptyApiKey,
@@ -10,9 +12,11 @@ pub enum AuthError {
     KeychainError(String),
     #[error("Failed to parse keychain credentials: {0}")]
     ParseError(String),
+    #[error("OAuth error: {0}")]
+    OAuthError(String),
 }
 
-/// Try ANTHROPIC_API_KEY env var first, then macOS Keychain OAuth token.
+/// Try ANTHROPIC_API_KEY env var, then macOS Keychain, then file-based OAuth credentials.
 pub fn get_token() -> Result<String, AuthError> {
     // 1. Env var takes priority
     match std::env::var("ANTHROPIC_API_KEY") {
@@ -22,10 +26,18 @@ pub fn get_token() -> Result<String, AuthError> {
     }
 
     // 2. Try macOS Keychain (Claude Code OAuth credentials)
-    match get_keychain_token() {
-        Ok(token) => Ok(token),
-        Err(_) => Err(AuthError::NoCredentials),
+    if let Ok(token) = get_keychain_token() {
+        return Ok(token);
     }
+
+    // 3. Try file-based OAuth credentials
+    if let Ok(creds) = oauth::load_credentials() {
+        if !creds.access_token.is_empty() {
+            return Ok(creds.access_token);
+        }
+    }
+
+    Err(AuthError::NoCredentials)
 }
 
 /// Read OAuth token from macOS Keychain where Claude Code stores credentials.
@@ -86,7 +98,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         env::remove_var("ANTHROPIC_API_KEY");
         let result = get_token();
-        // Will either find a keychain token or return NoCredentials
+        // Will either find a keychain/file token or return NoCredentials
         match result {
             Ok(token) => assert!(!token.is_empty()),
             Err(e) => assert!(matches!(e, AuthError::NoCredentials)),

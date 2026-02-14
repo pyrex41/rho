@@ -2,7 +2,7 @@
 
 ## Overview
 
-Port the PiCodingAgent (a TypeScript/Bun coding agent) to Rust as a Cargo workspace of 7 crates. The agent has a ~400 LOC core loop, 6 tools (Read, Edit, Write, Bash, Grep, Find), hashline-based file editing with xxHash32 integrity checks, SSE streaming for the Anthropic API, and Claude Code OAuth support. A future GUI crate (Iced) is planned but out of scope for v1.
+Port the PiCodingAgent (a TypeScript/Bun coding agent) to Rust as a Cargo workspace of 8 crates. The agent has a ~400 LOC core loop, 6 tools (Read, Edit, Write, Bash, Grep, Find), hashline-based file editing with xxHash32 integrity checks, SSE streaming for the Anthropic API, and Claude Code OAuth support. An Iced-based conversation GUI (`rho-gui`) is included as Phase 9.
 
 ## Current State Analysis
 
@@ -21,9 +21,10 @@ The `rho/` repo is empty (no commits). Everything starts from scratch.
 
 ## Desired End State
 
-A single `cargo build` produces two binaries:
+A single `cargo build` produces three binaries:
 1. **`rho`** — The coding agent CLI. Accepts a prompt, streams Claude's response, executes tool calls, loops until done.
 2. **`anthropic-auth`** — Standalone OAuth CLI. `anthropic-auth login` → browser OAuth → cached token. `anthropic-auth token` → prints current token.
+3. **`rho-gui`** — Iced-based native desktop GUI. Conversation view with markdown rendering, streaming text, collapsible tool call blocks, and syntax highlighting.
 
 The agent supports:
 - All 6 tools with hashline editing
@@ -56,7 +57,6 @@ cat ~/.config/rho/tools.toml   # Shows auto-detected tool backends
 
 ## What We're NOT Doing
 
-- **GUI (`rho-gui`)**: Iced-based conversation graph viewer is v2. The workspace structure includes the crate stub but no implementation.
 - **Multi-provider support**: Anthropic-only for v1. No OpenAI, Google, Bedrock.
 - **LSP integration**: The reference edit tool has format-on-write and diagnostics via LSP. Skipped for v1.
 - **Image support in Read tool**: Base64 image reading is skipped for v1.
@@ -1386,6 +1386,347 @@ impl MockProvider {
 
 ---
 
+## Phase 9: Iced GUI (`rho-gui`)
+
+### Overview
+Build a native desktop conversation UI using [Iced 0.14](https://iced.rs) — the Elm-architecture Rust GUI framework. The GUI subscribes to the same `EventStream<AgentEvent, Vec<Message>>` that the CLI consumes, so the agent loop is shared. The GUI replaces the CLI's `print!` output with a scrollable, markdown-rendered conversation view with collapsible tool call blocks.
+
+### Why Iced
+- Pure Rust, no C++ bindings or webview overhead
+- Elm architecture (Model/Message/update/view) maps directly to our existing `AgentEvent` stream
+- Built-in `markdown` widget with syntax highlighting via syntect
+- `Subscription::run` integrates natively with tokio channels/streams
+- Ships with 23 themes (TokyoNight, Catppuccin, Dracula, Nord, etc.)
+- Production-proven: COSMIC desktop, Halloy IRC client
+- macOS native — no extra system deps beyond Xcode CLI tools
+
+### Dependencies
+
+**Workspace additions** (`Cargo.toml`):
+```toml
+[workspace.dependencies]
+iced = { version = "0.14", features = ["markdown", "highlighter", "tokio"] }
+```
+
+**Crate** (`crates/rho-gui/Cargo.toml`):
+```toml
+[dependencies]
+rho-core = { path = "../rho-core" }
+rho-provider = { path = "../rho-provider" }
+rho-tools = { path = "../rho-tools" }
+anthropic-auth = { path = "../anthropic-auth" }
+iced = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+```
+
+### Changes Required
+
+#### 1. Application State
+
+**File**: `crates/rho-gui/src/app.rs`
+
+```rust
+use iced::{Element, Subscription, Task, Theme};
+use rho_core::types::{AgentEvent, Message as AgentMessage};
+
+pub struct RhoApp {
+    /// Conversation history (user prompts, assistant responses, tool results)
+    messages: Vec<ConversationBlock>,
+    /// Current streaming text being accumulated
+    streaming_text: String,
+    /// Tool calls in progress or completed
+    tool_calls: Vec<ToolCallBlock>,
+    /// User input field
+    input: String,
+    /// Agent sender — sends user prompts to the agent loop
+    agent_tx: Option<tokio::sync::mpsc::Sender<String>>,
+    /// Whether the agent is currently running
+    is_running: bool,
+    /// Which tool call blocks are expanded
+    expanded_tools: std::collections::HashSet<String>,
+    /// Current theme
+    theme: Theme,
+}
+
+/// A block in the conversation view
+enum ConversationBlock {
+    UserPrompt(String),
+    AssistantText(String),            // Completed markdown text
+    ToolCall(ToolCallBlock),          // Collapsible tool call + result
+}
+
+struct ToolCallBlock {
+    id: String,
+    tool_name: String,
+    args: serde_json::Value,
+    result: Option<String>,
+    is_error: bool,
+    expanded: bool,
+}
+```
+
+#### 2. Message & Update
+
+**File**: `crates/rho-gui/src/app.rs` (continued)
+
+```rust
+#[derive(Debug, Clone)]
+pub enum Message {
+    // User input
+    InputChanged(String),
+    Submit,
+
+    // Agent events (from subscription)
+    AgentEvent(AgentEvent),
+
+    // UI interactions
+    ToggleToolCall(String),
+    ThemeChanged(Theme),
+    CopyText(String),
+    ScrollToBottom,
+}
+
+fn update(state: &mut RhoApp, message: Message) -> Task<Message> {
+    match message {
+        Message::InputChanged(s) => { state.input = s; Task::none() }
+        Message::Submit => {
+            let prompt = std::mem::take(&mut state.input);
+            state.messages.push(ConversationBlock::UserPrompt(prompt.clone()));
+            state.is_running = true;
+            // Send to agent via channel
+            if let Some(tx) = &state.agent_tx {
+                let tx = tx.clone();
+                Task::perform(async move { tx.send(prompt).await.ok(); }, |_| Message::ScrollToBottom)
+            } else {
+                Task::none()
+            }
+        }
+        Message::AgentEvent(event) => {
+            match event {
+                AgentEvent::MessageUpdate { event: stream_event, .. } => {
+                    // Append text deltas to streaming buffer
+                    // ...
+                }
+                AgentEvent::ToolExecutionStart { tool_call_id, tool_name, args } => {
+                    state.tool_calls.push(ToolCallBlock { id: tool_call_id, tool_name, args, result: None, is_error: false, expanded: true });
+                }
+                AgentEvent::ToolExecutionEnd { tool_call_id, result, is_error, .. } => {
+                    // Update tool call block with result
+                }
+                AgentEvent::MessageEnd { .. } => {
+                    // Flush streaming text to conversation
+                    let text = std::mem::take(&mut state.streaming_text);
+                    state.messages.push(ConversationBlock::AssistantText(text));
+                }
+                AgentEvent::AgentEnd { .. } => {
+                    state.is_running = false;
+                }
+                _ => {}
+            }
+            snap_to_end()
+        }
+        Message::ToggleToolCall(id) => {
+            // Toggle expanded state
+            if state.expanded_tools.contains(&id) {
+                state.expanded_tools.remove(&id);
+            } else {
+                state.expanded_tools.insert(id);
+            }
+            Task::none()
+        }
+        _ => Task::none()
+    }
+}
+```
+
+#### 3. View — Conversation Layout
+
+**File**: `crates/rho-gui/src/view.rs`
+
+```rust
+use iced::widget::{button, column, container, markdown, row, scrollable, text, text_input};
+use iced::{Element, Length};
+
+const MESSAGE_LOG: &str = "message-log";
+
+fn view(state: &RhoApp) -> Element<Message> {
+    // Conversation area — scrollable list of blocks
+    let conversation = keyed_column(
+        state.messages.iter().enumerate().map(|(i, block)| {
+            (i, view_block(state, block))
+        })
+    ).spacing(12);
+
+    let chat_area = scrollable(
+        container(conversation).padding(20).width(Length::Fill)
+    )
+    .id(MESSAGE_LOG)
+    .height(Length::Fill);
+
+    // Input area
+    let input = text_input("Send a message...", &state.input)
+        .on_input(Message::InputChanged)
+        .on_submit(Message::Submit)
+        .padding(12)
+        .size(16);
+
+    let submit_btn = button(text("Send"))
+        .on_press_maybe((!state.input.is_empty()).then_some(Message::Submit));
+
+    let input_row = container(
+        row![input, submit_btn].spacing(8)
+    ).padding(12);
+
+    // Stack vertically
+    column![chat_area, input_row].into()
+}
+
+fn view_block<'a>(state: &'a RhoApp, block: &'a ConversationBlock) -> Element<'a, Message> {
+    match block {
+        ConversationBlock::UserPrompt(text) => {
+            container(text(text))
+                .padding(12)
+                .style(container::primary)
+                .width(Length::Fill)
+                .into()
+        }
+        ConversationBlock::AssistantText(md_content) => {
+            container(markdown(md_content))   // renders markdown + syntax highlighting
+                .padding(12)
+                .style(container::secondary)
+                .width(Length::Fill)
+                .into()
+        }
+        ConversationBlock::ToolCall(tc) => {
+            view_tool_call(state, tc)
+        }
+    }
+}
+
+fn view_tool_call<'a>(state: &'a RhoApp, tc: &'a ToolCallBlock) -> Element<'a, Message> {
+    let expanded = state.expanded_tools.contains(&tc.id);
+    let chevron = if expanded { "▼" } else { "▶" };
+    let header = button(
+        row![text(chevron), text(&tc.tool_name).size(14)].spacing(8)
+    ).on_press(Message::ToggleToolCall(tc.id.clone()));
+
+    let mut col = column![header].spacing(4);
+    if expanded {
+        // Show args
+        col = col.push(
+            container(text(serde_json::to_string_pretty(&tc.args).unwrap_or_default()).size(12))
+                .padding(8)
+                .style(container::bordered_box)
+        );
+        // Show result if available
+        if let Some(result) = &tc.result {
+            col = col.push(
+                container(markdown(result)).padding(8)
+            );
+        }
+    }
+    container(col).padding(8).width(Length::Fill).into()
+}
+```
+
+#### 4. Subscription — Bridge to Agent EventStream
+
+**File**: `crates/rho-gui/src/subscription.rs`
+
+The critical bridge: Iced's `Subscription::run` wraps a tokio stream that receives `AgentEvent`s from the agent loop's `EventStreamConsumer`.
+
+```rust
+use iced::Subscription;
+use iced::stream;
+use rho_core::types::AgentEvent;
+use futures::StreamExt;
+
+/// Subscribe to agent events via a tokio mpsc channel.
+/// The channel receiver is moved into the subscription on first call.
+pub fn agent_subscription(
+    receiver: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
+) -> Subscription<AgentEvent> {
+    Subscription::run(move || {
+        stream::channel(100, move |mut output| async move {
+            let mut rx = receiver;
+            while let Some(event) = rx.recv().await {
+                let _ = output.send(event).await;
+            }
+            // Keep alive — Iced drops the subscription if the future completes
+            futures::future::pending::<()>().await;
+        })
+    })
+}
+```
+
+#### 5. Binary Entry Point
+
+**File**: `crates/rho-gui/src/main.rs` (or `src/bin/rho-gui.rs` in root)
+
+```rust
+use iced::{application, Theme};
+
+fn main() -> iced::Result {
+    application(RhoApp::new, update, view)
+        .title("rho")
+        .theme(|state| state.theme.clone())
+        .subscription(|state| {
+            agent_subscription(state.event_receiver.take())
+                .map(Message::AgentEvent)
+        })
+        .window_size((900.0, 700.0))
+        .run()
+}
+```
+
+#### 6. Module Structure
+
+```
+crates/rho-gui/
+├── Cargo.toml
+├── src/
+│   ├── lib.rs          # pub mod app, view, subscription;
+│   ├── main.rs         # Binary entry point
+│   ├── app.rs          # State, Message, update()
+│   ├── view.rs         # view() + conversation block rendering
+│   └── subscription.rs # Agent EventStream → Iced Subscription bridge
+```
+
+### Key Design Decisions
+
+1. **Shared agent loop**: The GUI uses the exact same `agent_loop()` function and `EventStreamConsumer` as the CLI. No code duplication.
+
+2. **Markdown widget for responses**: Iced 0.14's built-in `markdown` widget handles headings, lists, code blocks with syntax highlighting (syntect). No custom renderer needed.
+
+3. **Collapsible tool blocks**: Iced has no native collapsible widget, so we use conditional rendering with toggle state in a `HashSet<String>`.
+
+4. **Auto-scroll**: `snap_to_end(MESSAGE_LOG)` keeps the conversation scrolled to the latest message, matching chat UX expectations.
+
+5. **Theme**: Default to `Theme::TokyoNight`. User-selectable from Iced's 23 built-in themes.
+
+6. **Streaming text**: Text deltas accumulate in `streaming_text: String`. On `MessageEnd`, the buffer flushes to a `ConversationBlock::AssistantText` and renders via the markdown widget.
+
+### Success Criteria
+
+#### Automated Verification:
+- [ ] `cargo build -p rho-gui` compiles
+- [ ] `cargo test -p rho-gui` passes
+- [ ] `cargo clippy -p rho-gui` clean
+
+#### Manual Verification:
+- [ ] Window opens with conversation area + input field
+- [ ] Typing a prompt and pressing Enter/Send starts the agent
+- [ ] Assistant text streams in real-time (word by word, not buffered)
+- [ ] Markdown renders correctly (headings, code blocks with highlighting, lists)
+- [ ] Tool call blocks appear inline with chevron toggle
+- [ ] Clicking a tool call expands/collapses it showing args + result
+- [ ] Conversation auto-scrolls to bottom on new content
+- [ ] Theme matches TokyoNight (dark background, colored syntax)
+- [ ] Multiple conversation turns work (send → response → send again)
+
+---
+
 ## Testing Strategy
 
 ### Unit Tests:
@@ -1394,6 +1735,7 @@ impl MockProvider {
 - **rho-provider**: SSE parsing with recorded event streams
 - **anthropic-auth**: PKCE generation, token management, file locking
 - **rho-core**: Event stream, type serialization, agent loop with mock provider
+- **rho-gui**: Subscription bridge (mock AgentEvents → Iced Messages), state update logic
 
 ### Integration Tests:
 - Full agent loop: prompt → provider → tool → result → loop
@@ -1430,3 +1772,7 @@ codegen-units = 1
 - Crate selections: `reference/FAST-TOOLS-AND-HASHLINE.md`
 - OAuth spec: `reference/upstream/claude-code-auth/CLAUDE-CODE-AUTH.md`
 - Blog posts: see `reference/REFERENCES.md`
+- Iced GUI framework: https://iced.rs (v0.14, Elm architecture)
+- Iced docs: https://docs.rs/iced/latest/iced/
+- Iced markdown widget: https://docs.rs/iced/latest/iced/widget/markdown/
+- Halloy IRC client (Iced chat reference): https://github.com/squidowl/halloy

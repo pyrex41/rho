@@ -7,6 +7,22 @@ use iced::{color, Element, Font, Length, Theme};
 
 use crate::app::{ConversationBlock, Message, RhoApp, ToolCallBlock};
 
+// --- Fonts ---
+
+pub const FONT_INTER: Font = Font::with_name("Inter");
+
+pub const FONT_MONO: Font = Font {
+    family: iced::font::Family::Name("JetBrains Mono"),
+    weight: iced::font::Weight::Normal,
+    stretch: iced::font::Stretch::Normal,
+    style: iced::font::Style::Normal,
+};
+
+pub const FONT_MONO_BOLD: Font = Font {
+    weight: iced::font::Weight::Bold,
+    ..FONT_MONO
+};
+
 // --- Top-level layout ---
 
 pub fn view(app: &RhoApp) -> Element<'_, Message> {
@@ -101,13 +117,80 @@ fn render_chat<'a>(app: &'a RhoApp) -> Element<'a, Message> {
 
     let chat_area = scrollable(blocks_col).height(Length::Fill);
 
+    // Autocomplete popup
+    let autocomplete_popup: Element<'_, Message> = if app.autocomplete.active {
+        let mut col = Column::new().spacing(0);
+        for (i, suggestion) in app.autocomplete.suggestions.iter().enumerate() {
+            let is_selected = i == app.autocomplete.selected;
+            let label = text(&suggestion.display)
+                .size(13)
+                .font(FONT_MONO)
+                .color(if is_selected {
+                    color!(0x7aa2f7)
+                } else {
+                    color!(0xa9b1d6)
+                });
+            let btn = button(label)
+                .on_press(Message::AutocompleteAccept)
+                .width(Length::Fill)
+                .padding([4, 8])
+                .style(move |_theme: &Theme, _status| {
+                    if is_selected {
+                        button::Style {
+                            background: Some(color!(0x283457).into()),
+                            ..button::Style::default()
+                        }
+                    } else {
+                        button::Style {
+                            background: None,
+                            ..button::Style::default()
+                        }
+                    }
+                });
+            col = col.push(btn);
+        }
+        container(col)
+            .width(Length::Fill)
+            .style(|theme: &Theme| {
+                let palette = theme.extended_palette();
+                container::Style {
+                    background: Some(palette.background.strong.color.into()),
+                    border: iced::Border {
+                        radius: 4.0.into(),
+                        width: 1.0,
+                        color: color!(0x565f89),
+                    },
+                    ..Default::default()
+                }
+            })
+            .padding([4, 0])
+            .into()
+    } else {
+        column![].into()
+    };
+
+    let shell_mode = app.input.starts_with('!');
+    let input_display: &str = if shell_mode {
+        &app.input[1..]
+    } else {
+        &app.input
+    };
+
     let placeholder = if app.is_running {
         "Agent working... (Esc to cancel)"
+    } else if shell_mode {
+        "Enter shell command..."
     } else {
         "Type a message... (! for shell)"
     };
 
-    let send_label = if app.is_running { "..." } else { "Send" };
+    let send_label = if app.is_running {
+        "..."
+    } else if shell_mode {
+        "Run"
+    } else {
+        "Send"
+    };
     let send_button = if app.is_running {
         button(send_label).padding([12, 24])
     } else {
@@ -116,17 +199,36 @@ fn render_chat<'a>(app: &'a RhoApp) -> Element<'a, Message> {
             .padding([12, 24])
     };
 
-    let input_area = row![
-        text_input(placeholder, &app.input)
-            .on_input(Message::InputChanged)
-            .on_submit(Message::SendPrompt)
-            .padding(12),
-        send_button,
-    ]
-    .spacing(8)
-    .padding(16);
+    let input_field = text_input(placeholder, input_display)
+        .id(crate::app::INPUT_ID)
+        .on_input(Message::InputChanged)
+        .on_submit(Message::SendPrompt)
+        .padding(12);
 
-    container(column![chat_area, input_area])
+    let input_area: Element<'_, Message> = if shell_mode {
+        let styled_input = input_field.style(|theme: &Theme, status| {
+            let mut s = text_input::default(theme, status);
+            s.border.color = color!(0xe0af68);
+            s.border.width = 2.0;
+            s
+        });
+        let prefix = text("!")
+            .size(18)
+            .font(FONT_MONO_BOLD)
+            .color(color!(0xe0af68));
+        row![prefix, styled_input, send_button]
+            .spacing(8)
+            .padding(16)
+            .align_y(iced::Alignment::Center)
+            .into()
+    } else {
+        row![input_field, send_button]
+            .spacing(8)
+            .padding(16)
+            .into()
+    };
+
+    container(column![chat_area, autocomplete_popup, input_area])
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -155,7 +257,7 @@ fn render_user_prompt(content: &str) -> Element<'_, Message> {
         text(content)
             .size(14)
             .color(color!(0x7aa2f7))
-            .font(Font::DEFAULT),
+            .font(FONT_INTER),
     )
     .padding(12)
     .width(Length::Fill)
@@ -233,10 +335,10 @@ fn render_shell_output<'a>(
     };
 
     let col = column![
-        text(format!("$ {command}")).size(13).color(header_color),
+        text(format!("$ {command}")).size(13).font(FONT_MONO).color(header_color),
         text(output)
             .size(12)
-            .font(Font::MONOSPACE)
+            .font(FONT_MONO)
             .color(color!(0xa9b1d6)),
     ]
     .spacing(4);
@@ -303,7 +405,7 @@ fn render_tool_call<'a>(
         col = col.push(
             text(tc.args.as_str())
                 .size(11)
-                .font(Font::MONOSPACE)
+                .font(FONT_MONO)
                 .color(color!(0x565f89)),
         );
         if let Some(ref result) = tc.result {
@@ -321,7 +423,7 @@ fn render_tool_call<'a>(
             col = col.push(
                 text(display)
                     .size(11)
-                    .font(Font::MONOSPACE)
+                    .font(FONT_MONO)
                     .color(result_color),
             );
         }

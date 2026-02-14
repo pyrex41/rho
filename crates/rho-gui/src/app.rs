@@ -4,12 +4,17 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use iced::widget::markdown;
-use iced::{keyboard, Subscription, Task as IcedTask};
+use iced::{event, keyboard, Subscription, Task as IcedTask};
 use tokio_util::sync::CancellationToken;
 
 use rho_core::agent_loop::{agent_loop, AgentLoopConfig};
+use rho_core::skills::SkillMetadata;
 use rho_core::tool::AgentTool;
 use rho_core::types::*;
+
+use crate::autocomplete::{self, AutocompleteState, AutocompleteTrigger};
+
+pub const INPUT_ID: &str = "rho-input";
 
 const SYSTEM_PROMPT: &str = "\
 You are a coding assistant with tools for reading, editing, searching files and running commands.
@@ -68,6 +73,12 @@ pub struct RhoApp {
     pub is_running: bool,
     pub expanded_tools: HashSet<String>,
     pub error: Option<String>,
+    pub autocomplete: AutocompleteState,
+    pub skills: Vec<SkillMetadata>,
+    // Command history
+    pub history: Vec<String>,
+    pub history_index: Option<usize>,
+    history_draft: String,
     // Agent infra
     cancel: CancellationToken,
     abort_handle: Option<iced::task::Handle>,
@@ -88,6 +99,9 @@ pub enum Message {
     AgentEvent(AgentEvent),
     CancelAgent,
     ShellDone(ShellResult),
+    AutocompleteAccept,
+    AutocompleteNavigate(i32),
+    KeyEvent(keyboard::Event),
     ToggleToolExpand(String),
     UrlClicked(markdown::Uri),
     Noop,
@@ -97,6 +111,9 @@ impl RhoApp {
     pub fn new() -> (Self, IcedTask<Message>) {
         let api_key = anthropic_auth::get_token().ok();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+        let skill_dirs = rho_core::skills::default_skill_dirs(&cwd);
+        let skills = rho_core::skills::discover_skills(&skill_dirs);
 
         let model = Model {
             id: "claude-sonnet-4-5-20250929".into(),
@@ -114,6 +131,11 @@ impl RhoApp {
             streaming_markdown: markdown::Content::new(),
             input: String::new(),
             is_running: false,
+            autocomplete: AutocompleteState::default(),
+            skills,
+            history: Vec::new(),
+            history_index: None,
+            history_draft: String::new(),
             expanded_tools: HashSet::new(),
             error: if api_key.is_none() {
                 Some("No API key found. Set ANTHROPIC_API_KEY or log in with Claude Code.".into())
@@ -136,10 +158,56 @@ impl RhoApp {
     pub fn update(&mut self, message: Message) -> IcedTask<Message> {
         match message {
             Message::InputChanged(text) => {
-                self.input = text;
+                // When in shell mode, the text_input displays without the `!` prefix.
+                // Prepend it back so self.input always has the full `!command`.
+                let was_shell_mode = self.input.starts_with('!');
+                if was_shell_mode {
+                    self.input = format!("!{}", text);
+                } else {
+                    self.input = text;
+                }
+                self.update_autocomplete();
+                // Refocus input when transitioning into shell mode
+                // (the text_input value switches from full input to stripped)
+                if !was_shell_mode && self.input == "!" {
+                    iced::widget::operation::focus(INPUT_ID)
+                } else {
+                    IcedTask::none()
+                }
+            }
+            Message::SendPrompt => {
+                if self.autocomplete.active {
+                    return self.update(Message::AutocompleteAccept);
+                }
+                let task = self.handle_send_prompt();
+                IcedTask::batch([task, iced::widget::operation::focus(INPUT_ID)])
+            }
+            Message::AutocompleteAccept => {
+                if let Some(suggestion) = self.autocomplete.suggestions.get(self.autocomplete.selected).cloned() {
+                    if let Some(ref trigger) = self.autocomplete.trigger {
+                        let start = match trigger {
+                            AutocompleteTrigger::Skill { start, .. } => *start,
+                            AutocompleteTrigger::File { start, .. } => *start,
+                        };
+                        let mut new_input = self.input[..start].to_string();
+                        new_input.push_str(&suggestion.completion);
+                        if suggestion.is_directory {
+                            // Keep popup open for directory navigation
+                            self.input = new_input;
+                            self.update_autocomplete();
+                        } else {
+                            new_input.push(' ');
+                            self.input = new_input;
+                            self.autocomplete.dismiss();
+                        }
+                    }
+                }
+                iced::widget::operation::move_cursor_to_end(INPUT_ID)
+            }
+            Message::AutocompleteNavigate(delta) => {
+                self.autocomplete.navigate(delta);
                 IcedTask::none()
             }
-            Message::SendPrompt => self.handle_send_prompt(),
             Message::AgentEvent(event) => {
                 self.handle_agent_event(event);
                 IcedTask::none()
@@ -169,6 +237,62 @@ impl RhoApp {
                 self.is_running = false;
                 IcedTask::none()
             }
+            Message::KeyEvent(event) => {
+                match event {
+                    // Escape: dismiss autocomplete first, then cancel agent
+                    keyboard::Event::KeyPressed {
+                        key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                        ..
+                    } => {
+                        if self.autocomplete.active {
+                            self.autocomplete.dismiss();
+                        } else if self.is_running {
+                            return self.update(Message::CancelAgent);
+                        }
+                    }
+                    // Backspace: exit shell mode when command is empty
+                    keyboard::Event::KeyPressed {
+                        key: keyboard::Key::Named(keyboard::key::Named::Backspace),
+                        ..
+                    } if self.input == "!" => {
+                        self.input.clear();
+                        return iced::widget::operation::focus(INPUT_ID);
+                    }
+                    // Tab: accept autocomplete suggestion
+                    keyboard::Event::KeyPressed {
+                        key: keyboard::Key::Named(keyboard::key::Named::Tab),
+                        ..
+                    } if self.autocomplete.active => {
+                        return self.update(Message::AutocompleteAccept);
+                    }
+                    // Up arrow: autocomplete navigation or history
+                    keyboard::Event::KeyPressed {
+                        key: keyboard::Key::Named(keyboard::key::Named::ArrowUp),
+                        ..
+                    } => {
+                        if self.autocomplete.active {
+                            return self.update(Message::AutocompleteNavigate(-1));
+                        } else if !self.history.is_empty() {
+                            self.history_up();
+                            return iced::widget::operation::move_cursor_to_end(INPUT_ID);
+                        }
+                    }
+                    // Down arrow: autocomplete navigation or history
+                    keyboard::Event::KeyPressed {
+                        key: keyboard::Key::Named(keyboard::key::Named::ArrowDown),
+                        ..
+                    } => {
+                        if self.autocomplete.active {
+                            return self.update(Message::AutocompleteNavigate(1));
+                        } else if self.history_index.is_some() {
+                            self.history_down();
+                            return iced::widget::operation::move_cursor_to_end(INPUT_ID);
+                        }
+                    }
+                    _ => {}
+                }
+                IcedTask::none()
+            }
             Message::ToggleToolExpand(id) => {
                 if !self.expanded_tools.remove(&id) {
                     self.expanded_tools.insert(id);
@@ -183,22 +307,84 @@ impl RhoApp {
         }
     }
 
+    fn update_autocomplete(&mut self) {
+        match autocomplete::detect_trigger(&self.input) {
+            Some(AutocompleteTrigger::Skill { ref query, .. }) => {
+                let suggestions = autocomplete::list_skill_suggestions(&self.skills, query);
+                self.autocomplete.active = !suggestions.is_empty();
+                self.autocomplete.trigger = autocomplete::detect_trigger(&self.input);
+                self.autocomplete.suggestions = suggestions;
+                self.autocomplete.selected = 0;
+            }
+            Some(AutocompleteTrigger::File { ref query, .. }) => {
+                let suggestions = autocomplete::list_file_suggestions(&self.cwd, query);
+                self.autocomplete.active = !suggestions.is_empty();
+                self.autocomplete.trigger = autocomplete::detect_trigger(&self.input);
+                self.autocomplete.suggestions = suggestions;
+                self.autocomplete.selected = 0;
+            }
+            None => {
+                self.autocomplete.dismiss();
+            }
+        }
+    }
+
+    fn history_up(&mut self) {
+        match self.history_index {
+            None => {
+                // Save current input as draft, jump to most recent history entry
+                self.history_draft = self.input.clone();
+                self.history_index = Some(self.history.len() - 1);
+                self.input = self.history[self.history.len() - 1].clone();
+            }
+            Some(idx) if idx > 0 => {
+                self.history_index = Some(idx - 1);
+                self.input = self.history[idx - 1].clone();
+            }
+            _ => {} // Already at oldest entry
+        }
+    }
+
+    fn history_down(&mut self) {
+        if let Some(idx) = self.history_index {
+            if idx + 1 < self.history.len() {
+                self.history_index = Some(idx + 1);
+                self.input = self.history[idx + 1].clone();
+            } else {
+                // Back to draft
+                self.history_index = None;
+                self.input = std::mem::take(&mut self.history_draft);
+            }
+        }
+    }
+
     fn handle_send_prompt(&mut self) -> IcedTask<Message> {
         if self.input.trim().is_empty() || self.is_running {
             return IcedTask::none();
         }
 
-        let prompt = self.input.clone();
+        let raw_input = self.input.clone();
         self.input.clear();
+        self.autocomplete.dismiss();
+        self.history_index = None;
+        self.history_draft.clear();
+
+        // Save to history (skip duplicates of last entry)
+        if self.history.last().map_or(true, |last| last != &raw_input) {
+            self.history.push(raw_input.clone());
+        }
+
+        let (display_text, resolved_text) =
+            autocomplete::resolve_references(&raw_input, &self.cwd, &self.skills);
 
         // Shell command (! prefix)
-        if let Some(cmd) = prompt.strip_prefix('!') {
+        if let Some(cmd) = display_text.strip_prefix('!') {
             let command = cmd.trim().to_string();
             if command.is_empty() {
                 return IcedTask::none();
             }
             self.messages
-                .push(ConversationBlock::UserPrompt(prompt.clone()));
+                .push(ConversationBlock::UserPrompt(display_text.clone()));
             self.is_running = true;
 
             let cwd = self.cwd.clone();
@@ -224,9 +410,9 @@ impl RhoApp {
             );
         }
 
-        // Normal agent prompt
+        // Normal agent prompt — show original text in chat, send resolved to agent
         self.messages
-            .push(ConversationBlock::UserPrompt(prompt.clone()));
+            .push(ConversationBlock::UserPrompt(display_text.clone()));
         self.is_running = true;
         self.streaming_text.clear();
         self.streaming_markdown = markdown::Content::new();
@@ -244,6 +430,18 @@ impl RhoApp {
         let cancel = CancellationToken::new();
         self.cancel = cancel.clone();
 
+        let skill_dirs = rho_core::skills::default_skill_dirs(&cwd);
+        let skills = rho_core::skills::discover_skills(&skill_dirs);
+        let system_prompt = if skills.is_empty() {
+            SYSTEM_PROMPT.to_string()
+        } else {
+            format!(
+                "{}\n\n{}",
+                SYSTEM_PROMPT,
+                rho_core::skills::format_skills_prompt(&skills)
+            )
+        };
+
         let tools: Vec<Arc<dyn AgentTool>> = vec![
             Arc::new(rho_tools::read::ReadTool::with_cwd(cwd.clone())),
             Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone())),
@@ -259,14 +457,14 @@ impl RhoApp {
             .as_millis() as u64;
 
         let prompts = vec![rho_core::types::Message::User {
-            content: UserContent::Text(prompt),
+            content: UserContent::Text(resolved_text),
             timestamp: now_ms,
         }];
 
         let config = AgentLoopConfig {
             model: self.model.clone(),
             api_key,
-            system_prompt: SYSTEM_PROMPT.to_string(),
+            system_prompt,
             tools,
             thinking: ThinkingLevel::Off,
             max_tokens: None,
@@ -345,18 +543,13 @@ impl RhoApp {
     }
 }
 
-pub fn subscription(app: &RhoApp) -> Subscription<Message> {
-    if app.is_running {
-        keyboard::listen().map(|event| match event {
-            keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Escape),
-                ..
-            } => Message::CancelAgent,
-            _ => Message::Noop,
-        })
-    } else {
-        Subscription::none()
-    }
+pub fn subscription(_app: &RhoApp) -> Subscription<Message> {
+    // Use event::listen_with to see ALL keyboard events, even those
+    // captured by text_input (e.g. Tab). Always active for history support.
+    event::listen_with(|event, _status, _window| match event {
+        iced::Event::Keyboard(kb_event) => Some(Message::KeyEvent(kb_event)),
+        _ => None,
+    })
 }
 
 /// Extract text content from a Vec<Content> for display.

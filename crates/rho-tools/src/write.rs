@@ -4,12 +4,36 @@ use rho_core::types::{Content, ToolResult};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Default)]
-pub struct WriteTool;
+pub struct WriteTool {
+    working_dir: Option<std::path::PathBuf>,
+}
 
 impl WriteTool {
     pub fn new() -> Self {
-        WriteTool
+        WriteTool { working_dir: None }
+    }
+
+    pub fn with_cwd(cwd: std::path::PathBuf) -> Self {
+        WriteTool {
+            working_dir: Some(cwd),
+        }
+    }
+
+    fn resolve_path(&self, path: &str) -> std::path::PathBuf {
+        let p = std::path::Path::new(path);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else if let Some(ref cwd) = self.working_dir {
+            cwd.join(p)
+        } else {
+            p.to_path_buf()
+        }
+    }
+}
+
+impl Default for WriteTool {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -62,7 +86,7 @@ impl AgentTool for WriteTool {
                 ToolError::InvalidParameters("missing or invalid 'content' parameter".into())
             })?;
 
-        let file_path = std::path::Path::new(path);
+        let file_path = self.resolve_path(path);
 
         if let Some(parent) = file_path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -71,7 +95,7 @@ impl AgentTool for WriteTool {
         }
 
         let bytes = content.len();
-        tokio::fs::write(file_path, content)
+        tokio::fs::write(&file_path, content)
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
