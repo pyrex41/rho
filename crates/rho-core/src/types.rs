@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 // === Content Types ===
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Content {
     #[serde(rename = "text")]
@@ -133,6 +133,11 @@ pub enum AgentEvent {
         tool_name: String,
         result: ToolResult,
         is_error: bool,
+    },
+    ContextCompacted {
+        original_estimate: usize,
+        compacted_estimate: usize,
+        messages_pruned: usize,
     },
 }
 

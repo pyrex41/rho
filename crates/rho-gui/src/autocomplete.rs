@@ -158,20 +158,35 @@ pub fn list_file_suggestions(cwd: &Path, query: &str) -> Vec<Suggestion> {
     suggestions
 }
 
-/// List skill suggestions for the `/` trigger.
-pub fn list_skill_suggestions(skills: &[SkillMetadata], query: &str) -> Vec<Suggestion> {
+/// List skill and command suggestions for the `/` trigger.
+pub fn list_skill_suggestions(skills: &[SkillMetadata], query: &str, cwd: &Path) -> Vec<Suggestion> {
     let query_lower = query.to_lowercase();
-    skills
-        .iter()
-        .filter(|s| {
-            query_lower.is_empty() || s.name.to_lowercase().contains(&query_lower)
-        })
-        .map(|s| Suggestion {
-            display: format!("{} — {}", s.name, s.description),
-            completion: format!("/{}", s.name),
-            is_directory: false,
-        })
-        .collect()
+    let mut suggestions = Vec::new();
+
+    // Built-in commands first
+    let commands = rho_core::commands::all_commands(cwd);
+    for cmd in &commands {
+        if query_lower.is_empty() || cmd.name.to_lowercase().contains(&query_lower) {
+            suggestions.push(Suggestion {
+                display: format!("/{} — {}", cmd.name, cmd.description),
+                completion: format!("/{}", cmd.name),
+                is_directory: false,
+            });
+        }
+    }
+
+    // Then skills
+    for s in skills {
+        if query_lower.is_empty() || s.name.to_lowercase().contains(&query_lower) {
+            suggestions.push(Suggestion {
+                display: format!("{} — {}", s.name, s.description),
+                completion: format!("/{}", s.name),
+                is_directory: false,
+            });
+        }
+    }
+
+    suggestions
 }
 
 /// Resolve `/skill` and `@file` references in the input.
@@ -412,12 +427,13 @@ mod tests {
             },
         ];
 
-        let suggestions = list_skill_suggestions(&skills, "");
-        assert_eq!(suggestions.len(), 2);
+        let tmp = tempfile::tempdir().unwrap();
+        let suggestions = list_skill_suggestions(&skills, "", tmp.path());
+        // 2 skills + 5 built-in commands
+        assert!(suggestions.len() >= 2);
 
-        let suggestions = list_skill_suggestions(&skills, "calc");
-        assert_eq!(suggestions.len(), 1);
-        assert_eq!(suggestions[0].completion, "/calculator");
+        let suggestions = list_skill_suggestions(&skills, "calc", tmp.path());
+        assert!(suggestions.iter().any(|s| s.completion == "/calculator"));
     }
 
     #[test]

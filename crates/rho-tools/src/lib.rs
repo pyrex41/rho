@@ -4,3 +4,4 @@ pub mod bash;
 pub mod grep;
 pub mod find;
 pub mod edit;
+pub mod task;

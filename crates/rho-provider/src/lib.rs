@@ -16,7 +16,7 @@ use crate::error::ProviderError;
 /// an async task to perform the HTTP request and SSE parsing. It returns
 /// an EventStreamConsumer that yields AssistantStreamEvents as they arrive.
 pub fn anthropic_stream_fn() -> StreamFn {
-    Box::new(
+    std::sync::Arc::new(
         move |model: &Model, context: StreamContext, options: StreamOptions| {
             let model = model.clone();
             let stream: AssistantStream = EventStream::new();

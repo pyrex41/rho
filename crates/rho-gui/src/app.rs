@@ -8,6 +8,8 @@ use iced::{event, keyboard, Subscription, Task as IcedTask};
 use tokio_util::sync::CancellationToken;
 
 use rho_core::agent_loop::{agent_loop, AgentLoopConfig};
+use rho_core::compaction;
+use rho_core::config::ProjectConfig;
 use rho_core::skills::SkillMetadata;
 use rho_core::tool::AgentTool;
 use rho_core::types::*;
@@ -26,6 +28,7 @@ Available tools:
 - bash: Execute shell commands
 - grep: Search file contents with regex (returns matches with LINE:HASH|content format)
 - find: Find files by glob pattern (respects .gitignore)
+- task: Launch a subagent to handle a task in a separate context
 
 When editing files, first read them to get LINE:HASH references, then use edit with those anchors. \
 For new files, use write. For small changes, use edit. For running tests or builds, use bash.";
@@ -75,6 +78,8 @@ pub struct RhoApp {
     pub error: Option<String>,
     pub autocomplete: AutocompleteState,
     pub skills: Vec<SkillMetadata>,
+    // Multi-turn conversation history
+    pub conversation_history: Vec<rho_core::types::Message>,
     // Command history
     pub history: Vec<String>,
     pub history_index: Option<usize>,
@@ -85,6 +90,7 @@ pub struct RhoApp {
     api_key: Option<String>,
     pub cwd: PathBuf,
     pub model: Model,
+    pub project_config: ProjectConfig,
     // Sidebar data
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
@@ -115,14 +121,26 @@ impl RhoApp {
         let skill_dirs = rho_core::skills::default_skill_dirs(&cwd);
         let skills = rho_core::skills::discover_skills(&skill_dirs);
 
+        let project_config = rho_core::config::load_project_config(&cwd);
+
+        let model_id = project_config
+            .model
+            .as_deref()
+            .unwrap_or("claude-sonnet-4-5-20250929");
+        let thinking = project_config.thinking.unwrap_or(ThinkingLevel::Off);
+
         let model = Model {
-            id: "claude-sonnet-4-5-20250929".into(),
-            name: "Sonnet 4.5".into(),
+            id: model_id.into(),
+            name: model_id.into(),
             provider: "anthropic".into(),
             base_url: String::new(),
-            reasoning: false,
+            reasoning: model_id.contains("opus") || thinking != ThinkingLevel::Off,
             context_window: 200_000,
-            max_tokens: 8_192,
+            max_tokens: if thinking != ThinkingLevel::Off {
+                16_384
+            } else {
+                8_192
+            },
         };
 
         let app = Self {
@@ -133,6 +151,7 @@ impl RhoApp {
             is_running: false,
             autocomplete: AutocompleteState::default(),
             skills,
+            conversation_history: Vec::new(),
             history: Vec::new(),
             history_index: None,
             history_draft: String::new(),
@@ -147,6 +166,7 @@ impl RhoApp {
             api_key,
             cwd,
             model,
+            project_config,
             total_input_tokens: 0,
             total_output_tokens: 0,
             session_start: Instant::now(),
@@ -310,7 +330,7 @@ impl RhoApp {
     fn update_autocomplete(&mut self) {
         match autocomplete::detect_trigger(&self.input) {
             Some(AutocompleteTrigger::Skill { ref query, .. }) => {
-                let suggestions = autocomplete::list_skill_suggestions(&self.skills, query);
+                let suggestions = autocomplete::list_skill_suggestions(&self.skills, query, &self.cwd);
                 self.autocomplete.active = !suggestions.is_empty();
                 self.autocomplete.trigger = autocomplete::detect_trigger(&self.input);
                 self.autocomplete.suggestions = suggestions;
@@ -374,8 +394,34 @@ impl RhoApp {
             self.history.push(raw_input.clone());
         }
 
+        // Handle /clear command
+        if raw_input.trim() == "/clear" {
+            self.conversation_history.clear();
+            self.messages.clear();
+            self.total_input_tokens = 0;
+            self.total_output_tokens = 0;
+            return IcedTask::none();
+        }
+
+        // Handle /compact command
+        if raw_input.trim() == "/compact" {
+            return self.handle_compact();
+        }
+
         let (display_text, resolved_text) =
             autocomplete::resolve_references(&raw_input, &self.cwd, &self.skills);
+
+        // Check if this is a built-in command (e.g. /research, /plan, /implement)
+        let final_text = if let Some(cmd_text) = resolved_text.strip_prefix('/') {
+            let (cmd_name, cmd_args) = match cmd_text.split_once(' ') {
+                Some((name, args)) => (name, args),
+                None => (cmd_text, ""),
+            };
+            rho_core::commands::resolve_command(cmd_name, cmd_args, &self.cwd)
+                .unwrap_or(resolved_text)
+        } else {
+            resolved_text
+        };
 
         // Shell command (! prefix)
         if let Some(cmd) = display_text.strip_prefix('!') {
@@ -430,53 +476,115 @@ impl RhoApp {
         let cancel = CancellationToken::new();
         self.cancel = cancel.clone();
 
+        let mut system_prompt = self.project_config
+            .system_prompt
+            .as_deref()
+            .unwrap_or(SYSTEM_PROMPT)
+            .to_string();
+
+        // Add skills
         let skill_dirs = rho_core::skills::default_skill_dirs(&cwd);
         let skills = rho_core::skills::discover_skills(&skill_dirs);
-        let system_prompt = if skills.is_empty() {
-            SYSTEM_PROMPT.to_string()
-        } else {
-            format!(
-                "{}\n\n{}",
-                SYSTEM_PROMPT,
-                rho_core::skills::format_skills_prompt(&skills)
-            )
-        };
+        if !skills.is_empty() {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&rho_core::skills::format_skills_prompt(&skills));
+        }
 
-        let tools: Vec<Arc<dyn AgentTool>> = vec![
-            Arc::new(rho_tools::read::ReadTool::with_cwd(cwd.clone())),
-            Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone())),
-            Arc::new(rho_tools::edit::EditTool::with_cwd(cwd.clone())),
-            Arc::new(rho_tools::bash::BashTool::new(cwd.clone())),
-            Arc::new(rho_tools::grep::GrepTool::new(cwd.clone())),
-            Arc::new(rho_tools::find::FindTool::new(cwd)),
-        ];
+        // Add commands
+        let commands = rho_core::commands::all_commands(&cwd);
+        if !commands.is_empty() {
+            system_prompt.push_str("\n\n<available_commands>\n");
+            for cmd in &commands {
+                system_prompt.push_str(&format!("  /{} — {}\n", cmd.name, cmd.description));
+            }
+            system_prompt.push_str("</available_commands>");
+        }
+
+        // Project config append
+        if let Some(ref append) = self.project_config.system_prompt_append {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(append);
+        }
+
+        let tools: Vec<Arc<dyn AgentTool>> = {
+            let all_tools: Vec<Arc<dyn AgentTool>> = vec![
+                Arc::new(rho_tools::read::ReadTool::with_cwd(cwd.clone())),
+                Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone())),
+                Arc::new(rho_tools::edit::EditTool::with_cwd(cwd.clone())),
+                Arc::new(rho_tools::bash::BashTool::new(cwd.clone())),
+                Arc::new(rho_tools::grep::GrepTool::new(cwd.clone())),
+                Arc::new(rho_tools::find::FindTool::new(cwd.clone())),
+                Arc::new(rho_tools::task::TaskTool::new(cwd)),
+            ];
+
+            if let Some(ref allowed) = self.project_config.allowed_tools {
+                all_tools
+                    .into_iter()
+                    .filter(|t| allowed.iter().any(|a| a == t.name()))
+                    .collect()
+            } else {
+                all_tools
+            }
+        };
 
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
 
-        let prompts = vec![rho_core::types::Message::User {
-            content: UserContent::Text(resolved_text),
+        // Multi-turn: pass accumulated history + new message
+        let mut prompts = self.conversation_history.clone();
+        prompts.push(rho_core::types::Message::User {
+            content: UserContent::Text(final_text),
             timestamp: now_ms,
-        }];
+        });
+
+        let thinking = self.project_config.thinking.unwrap_or(ThinkingLevel::Off);
+
+        // Build compaction transform if configured
+        let transform_messages = self.project_config.compact_threshold.map(|threshold| {
+            compaction::make_compaction_transform(threshold)
+        });
 
         let config = AgentLoopConfig {
             model: self.model.clone(),
             api_key,
             system_prompt,
             tools,
-            thinking: ThinkingLevel::Off,
+            thinking,
             max_tokens: None,
             stream_fn: rho_provider::anthropic_stream_fn(),
             get_steering_messages: None,
             get_follow_up_messages: None,
+            transform_messages,
         };
 
         let consumer = agent_loop(prompts, config, cancel);
         let (task, handle) = IcedTask::run(consumer, Message::AgentEvent).abortable();
         self.abort_handle = Some(handle);
         task
+    }
+
+    fn handle_compact(&mut self) -> IcedTask<Message> {
+        if self.conversation_history.is_empty() {
+            return IcedTask::none();
+        }
+
+        // Prune tool outputs aggressively, keep last 4 messages
+        self.conversation_history =
+            compaction::prune_tool_outputs(&self.conversation_history, 4);
+
+        self.messages
+            .push(ConversationBlock::UserPrompt("/compact".into()));
+        self.messages
+            .push(ConversationBlock::AssistantMarkdown {
+                raw: "Context compacted. Old tool outputs have been pruned.".into(),
+                items: markdown::Content::parse("*Context compacted.* Old tool outputs have been pruned.")
+                    .items()
+                    .to_vec(),
+            });
+
+        IcedTask::none()
     }
 
     fn handle_agent_event(&mut self, event: AgentEvent) {
@@ -534,12 +642,30 @@ impl RhoApp {
                     }
                 }
             }
-            AgentEvent::AgentEnd { .. } => {
+            AgentEvent::AgentEnd { messages, .. } => {
+                // Capture conversation history for multi-turn
+                self.conversation_history = messages;
                 self.is_running = false;
                 self.abort_handle = None;
             }
+            AgentEvent::ContextCompacted { .. } => {
+                // Could display a notification; for now, silent
+            }
             _ => {}
         }
+    }
+
+    /// Estimate current context usage as a percentage.
+    pub fn context_usage_percent(&self) -> f64 {
+        if self.conversation_history.is_empty() {
+            return 0.0;
+        }
+        let estimated = compaction::estimate_tokens(&self.conversation_history);
+        let window = self.model.context_window;
+        if window == 0 {
+            return 0.0;
+        }
+        (estimated as f64 / window as f64 * 100.0).min(100.0)
     }
 }
 
@@ -709,5 +835,55 @@ mod tests {
         let _ = app.update(Message::AgentEvent(event));
         assert_eq!(app.total_input_tokens, 100);
         assert_eq!(app.total_output_tokens, 50);
+    }
+
+    #[test]
+    fn clear_command_resets_state() {
+        let (mut app, _) = RhoApp::new();
+        app.conversation_history.push(rho_core::types::Message::User {
+            content: UserContent::Text("test".into()),
+            timestamp: 0,
+        });
+        app.messages.push(ConversationBlock::UserPrompt("test".into()));
+        app.total_input_tokens = 100;
+        app.total_output_tokens = 50;
+
+        app.input = "/clear".into();
+        let _ = app.update(Message::SendPrompt);
+
+        assert!(app.conversation_history.is_empty());
+        assert!(app.messages.is_empty());
+        assert_eq!(app.total_input_tokens, 0);
+        assert_eq!(app.total_output_tokens, 0);
+    }
+
+    #[test]
+    fn agent_end_captures_history() {
+        let (mut app, _) = RhoApp::new();
+        let messages = vec![
+            rho_core::types::Message::User {
+                content: UserContent::Text("hello".into()),
+                timestamp: 0,
+            },
+            rho_core::types::Message::Assistant {
+                content: vec![Content::Text { text: "hi".into() }],
+                model: "test".into(),
+                usage: Usage::default(),
+                stop_reason: StopReason::Stop,
+                timestamp: 0,
+            },
+        ];
+        app.is_running = true;
+        app.handle_agent_event(AgentEvent::AgentEnd {
+            messages: messages.clone(),
+        });
+        assert_eq!(app.conversation_history.len(), 2);
+        assert!(!app.is_running);
+    }
+
+    #[test]
+    fn context_usage_empty() {
+        let (app, _) = RhoApp::new();
+        assert_eq!(app.context_usage_percent(), 0.0);
     }
 }

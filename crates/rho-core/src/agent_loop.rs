@@ -19,6 +19,8 @@ pub struct AgentLoopConfig {
     pub stream_fn: StreamFn,
     pub get_steering_messages: Option<Box<dyn Fn() -> Vec<Message> + Send + Sync>>,
     pub get_follow_up_messages: Option<Box<dyn Fn() -> Vec<Message> + Send + Sync>>,
+    pub transform_messages:
+        Option<Box<dyn Fn(&[Message], &Model) -> (Vec<Message>, Option<crate::compaction::CompactionResult>) + Send + Sync>>,
 }
 
 pub fn agent_loop(
@@ -68,8 +70,25 @@ async fn run_loop(
                 })
                 .collect();
 
+            // Apply transform_messages hook (e.g., compaction) before sending to LLM
+            let effective_messages = if let Some(ref transform) = config.transform_messages {
+                let (transformed, compaction) = transform(&messages, &config.model);
+                if let Some(result) = compaction {
+                    let _ = stream
+                        .push(AgentEvent::ContextCompacted {
+                            original_estimate: result.original_estimate,
+                            compacted_estimate: result.compacted_estimate,
+                            messages_pruned: result.messages_pruned,
+                        })
+                        .await;
+                }
+                transformed
+            } else {
+                messages.clone()
+            };
+
             let assistant_msg =
-                stream_assistant_response(&config, &messages, &tool_defs, &stream).await;
+                stream_assistant_response(&config, &effective_messages, &tool_defs, &stream).await;
 
             let _ = stream
                 .push(AgentEvent::MessageEnd {
@@ -374,7 +393,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider_types::AssistantStream;
+    use crate::provider_types::{AssistantStream, StreamFn};
     use crate::tool::ToolError;
     use async_trait::async_trait;
     use std::sync::atomic::Ordering;
@@ -399,7 +418,7 @@ mod tests {
         let call_count_clone = call_count.clone();
         let calls = Arc::new(calls);
 
-        let f = Box::new(move |_model: &Model, _ctx: StreamContext, _opts: StreamOptions| {
+        let f: StreamFn = Arc::new(move |_model: &Model, _ctx: StreamContext, _opts: StreamOptions| {
             let n = call_count_clone.fetch_add(1, Ordering::SeqCst);
             let (events, final_msg) = (*calls)[n].clone();
 
@@ -469,6 +488,7 @@ mod tests {
             stream_fn: mock_stream_fn(events, final_msg),
             get_steering_messages: None,
             get_follow_up_messages: None,
+            transform_messages: None,
         };
 
         let prompts = vec![Message::User {
@@ -622,6 +642,7 @@ mod tests {
             stream_fn,
             get_steering_messages: None,
             get_follow_up_messages: None,
+            transform_messages: None,
         };
 
         let prompts = vec![Message::User {
@@ -728,6 +749,7 @@ mod tests {
             stream_fn,
             get_steering_messages: None,
             get_follow_up_messages: None,
+            transform_messages: None,
         };
 
         let prompts = vec![Message::User {

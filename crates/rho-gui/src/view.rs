@@ -67,6 +67,31 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         .push(text(format!("In: {}", format_tokens(app.total_input_tokens))).size(13))
         .push(text(format!("Out: {}", format_tokens(app.total_output_tokens))).size(13));
 
+    // Context
+    let context_pct = app.context_usage_percent();
+    if context_pct > 0.0 {
+        let ctx_color = if context_pct > 80.0 {
+            color!(0xf7768e)
+        } else if context_pct > 50.0 {
+            color!(0xe0af68)
+        } else {
+            color!(0xa9b1d6)
+        };
+        col = col
+            .push(text("CONTEXT").size(11).color(color!(0x565f89)))
+            .push(text(format!("~{:.0}% used", context_pct)).size(13).color(ctx_color));
+    }
+
+    // Turns
+    let turns = app.conversation_history.iter()
+        .filter(|m| matches!(m, rho_core::types::Message::User { .. }))
+        .count();
+    if turns > 0 {
+        col = col
+            .push(text("TURNS").size(11).color(color!(0x565f89)))
+            .push(text(format!("{}", turns)).size(13));
+    }
+
     // Session
     col = col
         .push(text("SESSION").size(11).color(color!(0x565f89)))

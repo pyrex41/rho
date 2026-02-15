@@ -1,4 +1,7 @@
 pub mod agent_loop;
+pub mod commands;
+pub mod compaction;
+pub mod config;
 pub mod error;
 pub mod event_stream;
 pub mod provider_types;
