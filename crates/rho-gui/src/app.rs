@@ -249,6 +249,21 @@ impl RhoApp {
                 IcedTask::none()
             }
             Message::ShellDone(result) => {
+                // Inject into conversation history so the LLM sees shell results
+                let truncated_output = truncate_shell_output(&result.output, 8000, 200);
+                let history_text = if result.is_error {
+                    format!("Shell command failed:\n$ {}\n\n{}", result.command, truncated_output)
+                } else {
+                    format!("Shell command output:\n$ {}\n\n{}", result.command, truncated_output)
+                };
+                self.conversation_history.push(rho_core::types::Message::User {
+                    content: UserContent::Text(history_text),
+                    timestamp: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                });
+
                 self.messages.push(ConversationBlock::ShellOutput {
                     command: result.command,
                     output: result.output,
@@ -678,6 +693,49 @@ pub fn subscription(_app: &RhoApp) -> Subscription<Message> {
     })
 }
 
+/// Truncate large shell output, keeping head and tail lines.
+///
+/// If the output exceeds `max_chars`, keeps the first and last `tail_lines`
+/// lines with a marker in between showing how much was omitted.
+fn truncate_shell_output(output: &str, max_chars: usize, tail_lines: usize) -> String {
+    if output.len() <= max_chars {
+        return output.to_string();
+    }
+
+    let lines: Vec<&str> = output.lines().collect();
+    if lines.len() <= tail_lines * 2 + 1 {
+        // Too few lines to meaningfully split — just char-truncate
+        let mut result = output[..max_chars].to_string();
+        result.push_str("\n... [truncated]");
+        return result;
+    }
+
+    // Take head lines until we approach half the budget
+    let half = max_chars / 2;
+    let mut head = String::new();
+    let mut head_count = 0;
+    for line in &lines {
+        if head.len() + line.len() + 1 > half {
+            break;
+        }
+        if !head.is_empty() {
+            head.push('\n');
+        }
+        head.push_str(line);
+        head_count += 1;
+    }
+
+    // Take tail lines from the end
+    let tail_start = lines.len().saturating_sub(tail_lines);
+    let tail: String = lines[tail_start..].join("\n");
+    let omitted = lines.len() - head_count - (lines.len() - tail_start);
+
+    format!(
+        "{}\n\n... [{} lines omitted] ...\n\n{}",
+        head, omitted, tail
+    )
+}
+
 /// Extract text content from a Vec<Content> for display.
 fn extract_text(content: &[Content]) -> String {
     content
@@ -885,5 +943,46 @@ mod tests {
     fn context_usage_empty() {
         let (app, _) = RhoApp::new();
         assert_eq!(app.context_usage_percent(), 0.0);
+    }
+
+    #[test]
+    fn truncate_shell_output_short() {
+        let output = "line1\nline2\nline3";
+        assert_eq!(truncate_shell_output(output, 8000, 200), output);
+    }
+
+    #[test]
+    fn truncate_shell_output_large() {
+        // Generate 500 lines
+        let lines: Vec<String> = (0..500).map(|i| format!("line {}: some content here", i)).collect();
+        let output = lines.join("\n");
+        let truncated = truncate_shell_output(&output, 2000, 50);
+
+        assert!(truncated.len() < output.len());
+        assert!(truncated.contains("lines omitted"));
+        // Should contain early lines
+        assert!(truncated.contains("line 0:"));
+        // Should contain late lines
+        assert!(truncated.contains("line 499:"));
+    }
+
+    #[test]
+    fn shell_done_injects_into_history() {
+        let (mut app, _) = RhoApp::new();
+        app.is_running = true;
+        let _ = app.update(Message::ShellDone(ShellResult {
+            command: "cargo test".into(),
+            output: "all tests passed".into(),
+            is_error: false,
+        }));
+        assert!(!app.is_running);
+        assert_eq!(app.conversation_history.len(), 1);
+        match &app.conversation_history[0] {
+            rho_core::types::Message::User { content: UserContent::Text(t), .. } => {
+                assert!(t.contains("cargo test"));
+                assert!(t.contains("all tests passed"));
+            }
+            _ => panic!("expected User message"),
+        }
     }
 }
