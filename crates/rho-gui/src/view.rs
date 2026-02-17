@@ -97,6 +97,39 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         .push(text("SESSION").size(11).color(color!(0x565f89)))
         .push(text(format!("{mins}m {secs:02}s")).size(13));
 
+    // Tools
+    col = col.push(text("TOOLS").size(11).color(color!(0x565f89)));
+    for (tool, enabled) in &app.available_tools {
+        let name = tool.name().to_string();
+        let label_color = if *enabled {
+            color!(0x9ece6a)
+        } else {
+            color!(0x565f89)
+        };
+        let indicator = if *enabled { "on " } else { "off" };
+        let label_text = format!("{indicator}  {name}");
+        let btn = button(
+            text(label_text)
+                .size(12)
+                .font(FONT_MONO)
+                .color(label_color),
+        )
+        .on_press(Message::ToggleTool(name))
+        .width(Length::Fill)
+        .padding([2, 4])
+        .style(move |_theme: &Theme, status| match status {
+            button::Status::Hovered => button::Style {
+                background: Some(color!(0x283457).into()),
+                ..button::Style::default()
+            },
+            _ => button::Style {
+                background: None,
+                ..button::Style::default()
+            },
+        });
+        col = col.push(btn);
+    }
+
     // Error
     if let Some(ref err) = app.error {
         col = col
@@ -274,6 +307,7 @@ fn render_block<'a>(
             is_error,
         } => render_shell_output(command, output, *is_error),
         ConversationBlock::ToolCall(tc) => render_tool_call(tc, expanded),
+        ConversationBlock::ToolSummary(counts) => render_tool_summary(counts),
     }
 }
 
@@ -455,4 +489,28 @@ fn render_tool_call<'a>(
     }
 
     container(col).padding(8).width(Length::Fill).into()
+}
+
+fn render_tool_summary(counts: &[(String, usize)]) -> Element<'_, Message> {
+    let summary = counts
+        .iter()
+        .map(|(name, count)| {
+            if *count > 1 {
+                format!("{name} x{count}")
+            } else {
+                name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    container(
+        text(format!("> {summary}"))
+            .size(12)
+            .font(FONT_MONO)
+            .color(color!(0x565f89)),
+    )
+    .padding([4, 12])
+    .width(Length::Fill)
+    .into()
 }

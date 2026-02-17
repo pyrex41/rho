@@ -3512,6 +3512,7 @@ dependencies = [
  "memmap2",
  "portable-pty",
  "regex",
+ "reqwest",
  "rho-core",
  "rho-hashline",
  "serde",

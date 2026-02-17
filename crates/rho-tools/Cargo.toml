@@ -14,6 +14,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+reqwest = { workspace = true }
 regex = { workspace = true }
 similar = { workspace = true }
 grep-regex = "0.1"

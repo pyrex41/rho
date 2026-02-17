@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -18,20 +18,40 @@ use crate::autocomplete::{self, AutocompleteState, AutocompleteTrigger};
 
 pub const INPUT_ID: &str = "rho-input";
 
-const SYSTEM_PROMPT: &str = "\
+const BASE_SYSTEM_PROMPT: &str = "\
 You are a coding assistant with tools for reading, editing, searching files and running commands.
 
 Available tools:
-- read: Read a file (returns LINE:HASH|content format) or list a directory
-- write: Create or overwrite a file
-- edit: Edit a file using LINE:HASH anchors from read output, or text replacement
-- bash: Execute shell commands
-- grep: Search file contents with regex (returns matches with LINE:HASH|content format)
-- find: Find files by glob pattern (respects .gitignore)
-- task: Launch a subagent to handle a task in a separate context
+{tool_list}
 
 When editing files, first read them to get LINE:HASH references, then use edit with those anchors. \
 For new files, use write. For small changes, use edit. For running tests or builds, use bash.";
+
+/// Short descriptions for each tool, used in the dynamic system prompt.
+fn tool_description(name: &str) -> &'static str {
+    match name {
+        "read" => "Read a file (returns LINE:HASH|content format) or list a directory",
+        "write" => "Create or overwrite a file",
+        "edit" => "Edit a file using LINE:HASH anchors from read output, or text replacement",
+        "bash" => "Execute shell commands",
+        "grep" => "Search file contents with regex (returns matches with LINE:HASH|content format)",
+        "find" => "Find files by glob pattern (respects .gitignore)",
+        "task" => "Launch a subagent to handle a task in a separate context",
+        "web_fetch" => "Fetch a URL and return its text content (HTML auto-converted to plain text)",
+        "web_search" => "Search the web and return results (requires BRAVE_SEARCH_API_KEY)",
+        _ => "Tool",
+    }
+}
+
+fn build_system_prompt_with_tools(tools: &[(Arc<dyn AgentTool>, bool)]) -> String {
+    let tool_list: String = tools
+        .iter()
+        .filter(|(_, enabled)| *enabled)
+        .map(|(t, _)| format!("- {}: {}", t.name(), tool_description(t.name())))
+        .collect::<Vec<_>>()
+        .join("\n");
+    BASE_SYSTEM_PROMPT.replace("{tool_list}", &tool_list)
+}
 
 /// A block in the conversation view.
 #[derive(Debug, Clone)]
@@ -48,6 +68,7 @@ pub enum ConversationBlock {
         is_error: bool,
     },
     ToolCall(ToolCallBlock),
+    ToolSummary(Vec<(String, usize)>),
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +112,10 @@ pub struct RhoApp {
     pub cwd: PathBuf,
     pub model: Model,
     pub project_config: ProjectConfig,
+    // Tools (modular activation)
+    pub available_tools: Vec<(Arc<dyn AgentTool>, bool)>,
+    // Tool summary tracking per turn
+    pub turn_tool_counts: HashMap<String, usize>,
     // Sidebar data
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
@@ -109,6 +134,7 @@ pub enum Message {
     AutocompleteNavigate(i32),
     KeyEvent(keyboard::Event),
     ToggleToolExpand(String),
+    ToggleTool(String),
     UrlClicked(markdown::Uri),
     Noop,
 }
@@ -143,6 +169,18 @@ impl RhoApp {
             },
         };
 
+        let available_tools: Vec<(Arc<dyn AgentTool>, bool)> = vec![
+            (Arc::new(rho_tools::read::ReadTool::with_cwd(cwd.clone())), true),
+            (Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone())), true),
+            (Arc::new(rho_tools::edit::EditTool::with_cwd(cwd.clone())), true),
+            (Arc::new(rho_tools::bash::BashTool::new(cwd.clone())), true),
+            (Arc::new(rho_tools::grep::GrepTool::new(cwd.clone())), true),
+            (Arc::new(rho_tools::find::FindTool::new(cwd.clone())), true),
+            (Arc::new(rho_tools::task::TaskTool::new(cwd.clone())), true),
+            (Arc::new(rho_tools::web_fetch::WebFetchTool::new()), true),
+            (Arc::new(rho_tools::web_search::WebSearchTool::new()), true),
+        ];
+
         let app = Self {
             messages: Vec::new(),
             streaming_text: String::new(),
@@ -167,6 +205,8 @@ impl RhoApp {
             cwd,
             model,
             project_config,
+            available_tools,
+            turn_tool_counts: HashMap::new(),
             total_input_tokens: 0,
             total_output_tokens: 0,
             session_start: Instant::now(),
@@ -334,6 +374,15 @@ impl RhoApp {
                 }
                 IcedTask::none()
             }
+            Message::ToggleTool(name) => {
+                for (tool, enabled) in &mut self.available_tools {
+                    if tool.name() == name {
+                        *enabled = !*enabled;
+                        break;
+                    }
+                }
+                IcedTask::none()
+            }
             Message::UrlClicked(_url) => {
                 // Could open in browser; for now, no-op
                 IcedTask::none()
@@ -493,9 +542,8 @@ impl RhoApp {
 
         let mut system_prompt = self.project_config
             .system_prompt
-            .as_deref()
-            .unwrap_or(SYSTEM_PROMPT)
-            .to_string();
+            .clone()
+            .unwrap_or_else(|| build_system_prompt_with_tools(&self.available_tools));
 
         // Add skills
         let skill_dirs = rho_core::skills::default_skill_dirs(&cwd);
@@ -522,23 +570,20 @@ impl RhoApp {
         }
 
         let tools: Vec<Arc<dyn AgentTool>> = {
-            let all_tools: Vec<Arc<dyn AgentTool>> = vec![
-                Arc::new(rho_tools::read::ReadTool::with_cwd(cwd.clone())),
-                Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone())),
-                Arc::new(rho_tools::edit::EditTool::with_cwd(cwd.clone())),
-                Arc::new(rho_tools::bash::BashTool::new(cwd.clone())),
-                Arc::new(rho_tools::grep::GrepTool::new(cwd.clone())),
-                Arc::new(rho_tools::find::FindTool::new(cwd.clone())),
-                Arc::new(rho_tools::task::TaskTool::new(cwd)),
-            ];
+            let enabled: Vec<Arc<dyn AgentTool>> = self
+                .available_tools
+                .iter()
+                .filter(|(_, enabled)| *enabled)
+                .map(|(tool, _)| tool.clone())
+                .collect();
 
             if let Some(ref allowed) = self.project_config.allowed_tools {
-                all_tools
+                enabled
                     .into_iter()
                     .filter(|t| allowed.iter().any(|a| a == t.name()))
                     .collect()
             } else {
-                all_tools
+                enabled
             }
         };
 
@@ -643,10 +688,12 @@ impl RhoApp {
             }
             AgentEvent::ToolExecutionEnd {
                 tool_call_id,
+                tool_name,
                 result,
                 is_error,
                 ..
             } => {
+                *self.turn_tool_counts.entry(tool_name).or_insert(0) += 1;
                 for block in self.messages.iter_mut().rev() {
                     if let ConversationBlock::ToolCall(tc) = block {
                         if tc.id == tool_call_id {
@@ -658,6 +705,14 @@ impl RhoApp {
                 }
             }
             AgentEvent::AgentEnd { messages, .. } => {
+                // Emit tool summary if any tools were used this turn
+                if !self.turn_tool_counts.is_empty() {
+                    let mut counts: Vec<(String, usize)> =
+                        self.turn_tool_counts.drain().collect();
+                    counts.sort_by(|a, b| b.1.cmp(&a.1));
+                    self.messages
+                        .push(ConversationBlock::ToolSummary(counts));
+                }
                 // Capture conversation history for multi-turn
                 self.conversation_history = messages;
                 self.is_running = false;

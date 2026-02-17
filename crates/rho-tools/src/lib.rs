@@ -5,3 +5,5 @@ pub mod grep;
 pub mod find;
 pub mod edit;
 pub mod task;
+pub mod web_fetch;
+pub mod web_search;
