@@ -407,6 +407,7 @@ mod tests {
             reasoning: false,
             context_window: 8192,
             max_tokens: 4096,
+            xai_tools: None,
         }
     }
 

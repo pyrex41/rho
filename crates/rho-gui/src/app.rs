@@ -222,6 +222,7 @@ impl RhoApp {
             } else {
                 8_192
             },
+            xai_tools: None,
         };
 
         let event_handler_config = EventHandlerConfig {

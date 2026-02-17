@@ -13,6 +13,9 @@ pub struct ProjectConfig {
     pub compact_threshold: Option<f64>,
     pub memories: bool,
     pub source: Option<PathBuf>,
+    /// xAI server-side tools to enable (e.g., "web_search", "x_search").
+    /// Only used when model is a grok-* model.
+    pub xai_tools: Option<Vec<String>>,
 }
 
 impl Default for ProjectConfig {
@@ -27,6 +30,7 @@ impl Default for ProjectConfig {
             compact_threshold: None,
             memories: true,
             source: None,
+            xai_tools: None,
         }
     }
 }
@@ -149,6 +153,12 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                         value.split(',').map(|s| s.trim().to_string()).collect(),
                     );
                 }
+                "xai_tools" => {
+                    // Inline comma-separated list (e.g., "web_search, x_search")
+                    config.xai_tools = Some(
+                        value.split(',').map(|s| s.trim().to_string()).collect(),
+                    );
+                }
                 _ => {}
             }
         }
@@ -166,6 +176,7 @@ fn apply_list_field(config: &mut ProjectConfig, key: &str, items: &[String]) {
     match key {
         "validation_commands" => config.validation_commands = items.to_vec(),
         "allowed_tools" => config.allowed_tools = Some(items.to_vec()),
+        "xai_tools" => config.xai_tools = Some(items.to_vec()),
         _ => {}
     }
 }

@@ -196,6 +196,7 @@ mod tests {
             reasoning: false,
             context_window: 200000,
             max_tokens: 8192,
+            xai_tools: None,
         }
     }
 

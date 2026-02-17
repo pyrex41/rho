@@ -55,6 +55,11 @@ struct Cli {
     /// Append to system prompt
     #[arg(long)]
     system_append: Option<String>,
+
+    /// Enable xAI server-side tools (comma-separated: web_search,x_search)
+    /// Only used with grok-* models.
+    #[arg(long, value_delimiter = ',')]
+    xai_tools: Option<Vec<String>>,
 }
 
 #[derive(Subcommand)]
@@ -92,6 +97,10 @@ enum Commands {
         /// Working directory
         #[arg(short = 'C', long)]
         directory: Option<PathBuf>,
+
+        /// Enable xAI server-side tools (comma-separated: web_search,x_search)
+        #[arg(long, value_delimiter = ',')]
+        xai_tools: Option<Vec<String>>,
     },
 }
 
@@ -160,19 +169,79 @@ fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>) -> Vec<Arc<dyn Agen
     }
 }
 
+fn is_xai_model(model_id: &str) -> bool {
+    model_id.starts_with("grok-")
+}
+
 fn build_model(model_id: &str, thinking: ThinkingLevel) -> Model {
+    if is_xai_model(model_id) {
+        build_xai_model(model_id)
+    } else {
+        Model {
+            id: model_id.to_string(),
+            name: model_id.to_string(),
+            provider: "anthropic".into(),
+            base_url: String::new(),
+            reasoning: model_id.contains("opus") || thinking != ThinkingLevel::Off,
+            context_window: 200_000,
+            max_tokens: if thinking != ThinkingLevel::Off {
+                16_384
+            } else {
+                8_192
+            },
+            xai_tools: None,
+        }
+    }
+}
+
+fn build_xai_model(model_id: &str) -> Model {
+    // Determine context window and max tokens based on model variant
+    let (context_window, max_tokens) = match model_id {
+        id if id.contains("grok-4-1-fast") => (2_000_000, 16_384),
+        id if id.contains("grok-4") => (131_072, 16_384),
+        id if id.contains("grok-code-fast") => (256_000, 16_384),
+        id if id.contains("grok-3-mini") => (131_072, 8_192),
+        id if id.contains("grok-3") => (131_072, 16_384),
+        id if id.contains("grok-2") => (32_768, 8_192),
+        _ => (131_072, 8_192),
+    };
+
+    let reasoning = model_id.contains("reasoning");
+
     Model {
         id: model_id.to_string(),
         name: model_id.to_string(),
-        provider: "anthropic".into(),
+        provider: "xai".into(),
         base_url: String::new(),
-        reasoning: model_id.contains("opus") || thinking != ThinkingLevel::Off,
-        context_window: 200_000,
-        max_tokens: if thinking != ThinkingLevel::Off {
-            16_384
-        } else {
-            8_192
-        },
+        reasoning,
+        context_window,
+        max_tokens,
+        xai_tools: None,
+    }
+}
+
+/// Resolve the API key based on the model provider.
+/// For xAI models: checks --api-key flag, then XAI_API_KEY env var.
+/// For Anthropic models: checks --api-key flag, then ANTHROPIC_API_KEY / keychain / OAuth.
+fn resolve_api_key(cli_key: Option<&str>, model: &Model) -> Result<String> {
+    if let Some(key) = cli_key {
+        return Ok(key.to_string());
+    }
+
+    if model.provider == "xai" {
+        std::env::var("XAI_API_KEY")
+            .context("XAI_API_KEY environment variable not set. Set it or use --api-key.")
+    } else {
+        anthropic_auth::get_token().context("Failed to get API key")
+    }
+}
+
+/// Get the appropriate stream function for the model's provider.
+fn get_stream_fn(model: &Model) -> rho_core::provider_types::StreamFn {
+    if model.provider == "xai" {
+        rho_provider::xai_stream_fn()
+    } else {
+        rho_provider::anthropic_stream_fn()
     }
 }
 
@@ -272,6 +341,7 @@ async fn main() -> Result<()> {
             thinking,
             api_key,
             directory,
+            xai_tools,
         }) => {
             let cwd = match directory {
                 Some(dir) => std::fs::canonicalize(&dir)
@@ -292,12 +362,12 @@ async fn main() -> Result<()> {
             });
             let thinking_level = parse_thinking(&thinking_str);
 
-            let api_key = match api_key {
-                Some(key) => key,
-                None => anthropic_auth::get_token().context("Failed to get API key")?,
-            };
+            let mut model = build_model(&model_id, thinking_level);
+            // CLI --xai-tools overrides config
+            model.xai_tools = xai_tools.or(project_config.xai_tools.clone());
 
-            let model = build_model(&model_id, thinking_level);
+            let api_key = resolve_api_key(api_key.as_deref(), &model)?;
+            let stream_fn = get_stream_fn(&model);
 
             // Plan mode defaults to read-only tools
             let default_tools = if loop_runner::LoopMode::from_str(&mode) == loop_runner::LoopMode::Plan {
@@ -328,7 +398,7 @@ async fn main() -> Result<()> {
                 thinking: thinking_level,
                 validation_commands: project_config.validation_commands,
                 cwd,
-                stream_fn: rho_provider::anthropic_stream_fn(),
+                stream_fn,
             };
 
             loop_runner::run_loop(loop_config, cancel).await?;
@@ -361,12 +431,12 @@ async fn main() -> Result<()> {
                 .thinking
                 .unwrap_or_else(|| parse_thinking(&cli.thinking));
 
-            let api_key = match &cli.api_key {
-                Some(key) => key.clone(),
-                None => anthropic_auth::get_token().context("Failed to get API key")?,
-            };
+            let mut model = build_model(model_id, thinking);
+            // CLI --xai-tools overrides config
+            model.xai_tools = cli.xai_tools.clone().or(project_config.xai_tools.clone());
 
-            let model = build_model(model_id, thinking);
+            let api_key = resolve_api_key(cli.api_key.as_deref(), &model)?;
+            let stream_fn = get_stream_fn(&model);
 
             // Merge tool restrictions: CLI flag overrides config
             let allowed_tools = cli.tools.or(project_config.allowed_tools.clone());
@@ -400,7 +470,7 @@ async fn main() -> Result<()> {
                 tools,
                 thinking,
                 max_tokens: None,
-                stream_fn: rho_provider::anthropic_stream_fn(),
+                stream_fn,
                 get_steering_messages: None,
                 get_follow_up_messages: None,
                 transform_messages,

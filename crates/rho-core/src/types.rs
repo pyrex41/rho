@@ -84,6 +84,10 @@ pub struct Model {
     pub reasoning: bool,
     pub context_window: usize,
     pub max_tokens: usize,
+    /// Optional xAI server-side tools to enable (e.g., "web_search", "x_search").
+    /// Only used when provider is "xai". These are tools that run on xAI's servers
+    /// and are automatically invoked by the model.
+    pub xai_tools: Option<Vec<String>>,
 }
 
 // === Tool Definition ===

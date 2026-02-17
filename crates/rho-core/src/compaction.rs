@@ -267,6 +267,7 @@ mod tests {
             reasoning: false,
             context_window: 200_000,
             max_tokens: 8192,
+            xai_tools: None,
         };
         let msgs = vec![make_user("short")];
         let (result, compaction) = transform(&msgs, &model);
