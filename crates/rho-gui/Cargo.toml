@@ -12,12 +12,14 @@ rho-core = { path = "../rho-core" }
 rho-provider = { path = "../rho-provider" }
 rho-tools = { path = "../rho-tools" }
 anthropic-auth = { path = "../anthropic-auth" }
+rho-session = { path = "../rho-session" }
 iced = { version = "0.14", features = ["markdown", "highlighter", "tokio"] }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
+dirs = "5"
 
 [dev-dependencies]
 tempfile = "3.25.0"

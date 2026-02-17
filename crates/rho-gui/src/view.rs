@@ -98,6 +98,113 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         .push(text("SESSION").size(11).color(color!(0x565f89)))
         .push(text(format!("{mins}m {secs:02}s")).size(13));
 
+    // Sessions
+    col = col.push(text("SESSIONS").size(11).color(color!(0x565f89)));
+    let new_btn = button(
+        text("+ New Session")
+            .size(12)
+            .font(FONT_MONO)
+            .color(color!(0x7aa2f7)),
+    )
+    .on_press(Message::NewSession)
+    .width(Length::Fill)
+    .padding([2, 4])
+    .style(move |_theme: &Theme, status| match status {
+        button::Status::Hovered => button::Style {
+            background: Some(color!(0x283457).into()),
+            ..button::Style::default()
+        },
+        _ => button::Style {
+            background: None,
+            ..button::Style::default()
+        },
+    });
+    col = col.push(new_btn);
+
+    for session in app.session_list.iter().take(10) {
+        let is_current = app.current_session_id.as_deref() == Some(&session.id);
+        let title_color = if is_current {
+            color!(0x7aa2f7)
+        } else {
+            color!(0xa9b1d6)
+        };
+        let session_id = session.id.clone();
+        let delete_id = session.id.clone();
+
+        let title_btn = button(
+            text(truncate_sidebar_text(&session.title, 22))
+                .size(12)
+                .font(FONT_MONO)
+                .color(title_color),
+        )
+        .on_press(Message::LoadSession(session_id))
+        .width(Length::Fill)
+        .padding([2, 4])
+        .style(move |_theme: &Theme, status| match status {
+            button::Status::Hovered => button::Style {
+                background: Some(color!(0x283457).into()),
+                ..button::Style::default()
+            },
+            _ => button::Style {
+                background: if is_current {
+                    Some(color!(0x1a1b26).into())
+                } else {
+                    None
+                },
+                ..button::Style::default()
+            },
+        });
+
+        let del_btn = button(
+            text("x")
+                .size(10)
+                .font(FONT_MONO)
+                .color(color!(0x565f89)),
+        )
+        .on_press(Message::DeleteSession(delete_id))
+        .padding([2, 4])
+        .style(move |_theme: &Theme, status| match status {
+            button::Status::Hovered => button::Style {
+                background: Some(color!(0xf7768e).into()),
+                ..button::Style::default()
+            },
+            _ => button::Style {
+                background: None,
+                ..button::Style::default()
+            },
+        });
+
+        col = col.push(row![title_btn, del_btn].spacing(2));
+    }
+
+    // Memories
+    if !app.memories.is_empty() {
+        col = col.push(text("MEMORIES").size(11).color(color!(0x565f89)));
+        for mem in &app.memories {
+            let name = mem.name.clone();
+            let btn = button(
+                text(truncate_sidebar_text(&mem.name, 22))
+                    .size(12)
+                    .font(FONT_MONO)
+                    .color(color!(0xbb9af7)),
+            )
+            .on_press(Message::InputChanged(format!("/{}", name)))
+            .width(Length::Fill)
+            .padding([2, 4])
+            .style(move |_theme: &Theme, status| match status {
+                button::Status::Hovered => button::Style {
+                    background: Some(color!(0x283457).into()),
+                    ..button::Style::default()
+                },
+                _ => button::Style {
+                    background: None,
+                    ..button::Style::default()
+                },
+            });
+            col = col.push(btn);
+        }
+    }
+
     // Tools
     col = col.push(text("TOOLS").size(11).color(color!(0x565f89)));
     for (tool, enabled) in &app.available_tools {
@@ -178,6 +285,14 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
             }
         })
         .into()
+}
+
+fn truncate_sidebar_text(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max.saturating_sub(3)])
+    }
 }
 
 fn format_tokens(n: u64) -> String {

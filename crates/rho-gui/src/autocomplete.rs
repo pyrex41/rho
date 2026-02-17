@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use rho_core::memories::MemoryMetadata;
 use rho_core::skills::SkillMetadata;
 
 #[derive(Debug, Clone)]
@@ -158,8 +159,13 @@ pub fn list_file_suggestions(cwd: &Path, query: &str) -> Vec<Suggestion> {
     suggestions
 }
 
-/// List skill and command suggestions for the `/` trigger.
-pub fn list_skill_suggestions(skills: &[SkillMetadata], query: &str, cwd: &Path) -> Vec<Suggestion> {
+/// List skill, command, and memory suggestions for the `/` trigger.
+pub fn list_skill_suggestions(
+    skills: &[SkillMetadata],
+    memories: &[MemoryMetadata],
+    query: &str,
+    cwd: &Path,
+) -> Vec<Suggestion> {
     let query_lower = query.to_lowercase();
     let mut suggestions = Vec::new();
 
@@ -186,10 +192,26 @@ pub fn list_skill_suggestions(skills: &[SkillMetadata], query: &str, cwd: &Path)
         }
     }
 
+    // Then memories
+    for m in memories {
+        if query_lower.is_empty() || m.name.to_lowercase().contains(&query_lower) {
+            let tag_str = if m.tags.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", m.tags.join(", "))
+            };
+            suggestions.push(Suggestion {
+                display: format!("{} — {}{}", m.name, m.description, tag_str),
+                completion: format!("/{}", m.name),
+                is_directory: false,
+            });
+        }
+    }
+
     suggestions
 }
 
-/// Resolve `/skill` and `@file` references in the input.
+/// Resolve `/skill`, `/memory`, and `@file` references in the input.
 ///
 /// Returns `(display_text, resolved_text)`:
 /// - `display_text` is the original input (shown in chat)
@@ -198,6 +220,7 @@ pub fn resolve_references(
     input: &str,
     cwd: &Path,
     skills: &[SkillMetadata],
+    memories: &[MemoryMetadata],
 ) -> (String, String) {
     let display_text = input.to_string();
     let mut resolved = input.to_string();
@@ -228,6 +251,39 @@ pub fn resolve_references(
                     "<skill name=\"{}\">\n{}\n</skill>",
                     skill.name, content
                 ));
+                remaining = &remaining[end..];
+            } else {
+                result.push_str(&remaining[..end]);
+                remaining = &remaining[end..];
+            }
+        }
+        result.push_str(remaining);
+        resolved = result;
+    }
+
+    // Resolve `/memory` references
+    for memory in memories {
+        let token = format!("/{}", memory.name);
+        let mut result = String::new();
+        let mut remaining = resolved.as_str();
+        while let Some(pos) = remaining.find(&token) {
+            let valid_start = if pos == 0 {
+                true
+            } else {
+                remaining[..pos].ends_with(char::is_whitespace)
+            };
+            let end = pos + token.len();
+            let valid_end = end >= remaining.len()
+                || remaining[end..].starts_with(char::is_whitespace);
+
+            if valid_start && valid_end {
+                result.push_str(&remaining[..pos]);
+                if let Some(content) = rho_core::memories::load_memory_content(memory) {
+                    result.push_str(&format!(
+                        "<memory name=\"{}\">\n{}\n</memory>",
+                        memory.name, content
+                    ));
+                }
                 remaining = &remaining[end..];
             } else {
                 result.push_str(&remaining[..end]);
@@ -428,11 +484,11 @@ mod tests {
         ];
 
         let tmp = tempfile::tempdir().unwrap();
-        let suggestions = list_skill_suggestions(&skills, "", tmp.path());
+        let suggestions = list_skill_suggestions(&skills, &[], "", tmp.path());
         // 2 skills + 5 built-in commands
         assert!(suggestions.len() >= 2);
 
-        let suggestions = list_skill_suggestions(&skills, "calc", tmp.path());
+        let suggestions = list_skill_suggestions(&skills, &[], "calc", tmp.path());
         assert!(suggestions.iter().any(|s| s.completion == "/calculator"));
     }
 
@@ -448,7 +504,7 @@ mod tests {
             path: skill_file,
         }];
 
-        let (display, resolved) = resolve_references("/calc", tmp.path(), &skills);
+        let (display, resolved) = resolve_references("/calc", tmp.path(), &skills, &[]);
         assert_eq!(display, "/calc");
         assert!(resolved.contains("<skill name=\"calc\">"));
         assert!(resolved.contains("Do math."));
@@ -459,7 +515,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("test.txt"), "file content here").unwrap();
 
-        let (display, resolved) = resolve_references("@test.txt", tmp.path(), &[]);
+        let (display, resolved) = resolve_references("@test.txt", tmp.path(), &[], &[]);
         assert_eq!(display, "@test.txt");
         assert!(resolved.contains("<file path=\"test.txt\">"));
         assert!(resolved.contains("file content here"));
@@ -468,7 +524,7 @@ mod tests {
     #[test]
     fn resolve_references_nonexistent_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let (_, resolved) = resolve_references("@nofile.txt", tmp.path(), &[]);
+        let (_, resolved) = resolve_references("@nofile.txt", tmp.path(), &[], &[]);
         assert_eq!(resolved, "@nofile.txt");
     }
 
@@ -486,7 +542,7 @@ mod tests {
         }];
 
         let input = "Use /tool and read @data.txt please";
-        let (display, resolved) = resolve_references(input, tmp.path(), &skills);
+        let (display, resolved) = resolve_references(input, tmp.path(), &skills, &[]);
         assert_eq!(display, input);
         assert!(resolved.contains("<skill name=\"tool\">"));
         assert!(resolved.contains("<file path=\"data.txt\">"));
@@ -506,15 +562,15 @@ mod tests {
         }];
 
         // Partial name after editing — should NOT resolve
-        let (_, resolved) = resolve_references("/calc", tmp.path(), &skills);
+        let (_, resolved) = resolve_references("/calc", tmp.path(), &skills, &[]);
         assert_eq!(resolved, "/calc");
 
         // Fully removed — should NOT resolve
-        let (_, resolved) = resolve_references("hello world", tmp.path(), &skills);
+        let (_, resolved) = resolve_references("hello world", tmp.path(), &skills, &[]);
         assert_eq!(resolved, "hello world");
 
         // Exact name — should resolve
-        let (_, resolved) = resolve_references("/calculator", tmp.path(), &skills);
+        let (_, resolved) = resolve_references("/calculator", tmp.path(), &skills, &[]);
         assert!(resolved.contains("<skill name=\"calculator\">"));
     }
 

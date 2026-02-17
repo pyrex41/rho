@@ -8,6 +8,7 @@ members = [
     "crates/rho-tools",
     "crates/anthropic-auth",
     "crates/rho-gui",
+    "crates/rho-session",
 ]
 resolver = "2"
 
@@ -52,3 +53,5 @@ bytes = "1"
 regex = "1"
 similar = "2"
 chrono = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }

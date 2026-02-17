@@ -212,6 +212,16 @@ fn build_system_prompt(
         prompt.push_str(&rho_core::skills::format_skills_prompt(&skills));
     }
 
+    // Add memories
+    if config.memories {
+        let memory_dirs = rho_core::memories::default_memory_dirs(cwd);
+        let memories = rho_core::memories::discover_memories(&memory_dirs);
+        if !memories.is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(&rho_core::memories::format_memories_prompt(&memories));
+        }
+    }
+
     // Add commands
     let commands = rho_core::commands::all_commands(cwd);
     if !commands.is_empty() {

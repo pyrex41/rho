@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::types::ThinkingLevel;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ProjectConfig {
     pub model: Option<String>,
     pub thinking: Option<ThinkingLevel>,
@@ -11,7 +11,24 @@ pub struct ProjectConfig {
     pub allowed_tools: Option<Vec<String>>,
     pub validation_commands: Vec<String>,
     pub compact_threshold: Option<f64>,
+    pub memories: bool,
     pub source: Option<PathBuf>,
+}
+
+impl Default for ProjectConfig {
+    fn default() -> Self {
+        Self {
+            model: None,
+            thinking: None,
+            system_prompt: None,
+            system_prompt_append: None,
+            allowed_tools: None,
+            validation_commands: Vec::new(),
+            compact_threshold: None,
+            memories: true,
+            source: None,
+        }
+    }
 }
 
 /// Load project configuration from RHO.md or CLAUDE.md.
@@ -122,6 +139,9 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                     if let Ok(v) = value.parse::<f64>() {
                         config.compact_threshold = Some(v);
                     }
+                }
+                "memories" => {
+                    config.memories = value != "false";
                 }
                 "allowed_tools" => {
                     // Inline comma-separated list

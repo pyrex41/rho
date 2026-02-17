@@ -11,9 +11,13 @@ use tokio_util::sync::CancellationToken;
 use rho_core::agent_loop::{agent_loop, AgentLoopConfig};
 use rho_core::compaction;
 use rho_core::config::ProjectConfig;
+use rho_core::memories::MemoryMetadata;
 use rho_core::skills::SkillMetadata;
 use rho_core::tool::AgentTool;
 use rho_core::types::*;
+
+use rho_core::event_handler::{EventHandlerConfig, EventHandlerResult};
+use rho_session::SessionStore;
 
 use crate::autocomplete::{self, AutocompleteState, AutocompleteTrigger};
 
@@ -119,6 +123,7 @@ pub struct RhoApp {
     pub error: Option<String>,
     pub autocomplete: AutocompleteState,
     pub skills: Vec<SkillMetadata>,
+    pub memories: Vec<MemoryMetadata>,
     // Multi-turn conversation history
     pub conversation_history: Vec<rho_core::types::Message>,
     // Command history
@@ -138,6 +143,11 @@ pub struct RhoApp {
     pub claude_proxy: Arc<AtomicBool>,
     // Tool summary tracking per turn
     pub turn_tool_counts: HashMap<String, usize>,
+    // Session persistence
+    pub session_store: Arc<SessionStore>,
+    pub current_session_id: Option<String>,
+    pub session_list: Vec<rho_session::SessionSummary>,
+    pub event_handler_config: EventHandlerConfig,
     // Sidebar data
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
@@ -159,6 +169,9 @@ pub enum Message {
     ToggleTool(String),
     ToggleClaudeProxy,
     UrlClicked(markdown::Uri),
+    LoadSession(String),
+    NewSession,
+    DeleteSession(String),
     Noop,
 }
 
@@ -171,6 +184,25 @@ impl RhoApp {
         let skills = rho_core::skills::discover_skills(&skill_dirs);
 
         let project_config = rho_core::config::load_project_config(&cwd);
+
+        // Memories
+        let memories = if project_config.memories {
+            let memory_dirs = rho_core::memories::default_memory_dirs(&cwd);
+            rho_core::memories::discover_memories(&memory_dirs)
+        } else {
+            Vec::new()
+        };
+
+        // Session store
+        let session_db_path = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".rho")
+            .join("sessions.db");
+        let session_store = Arc::new(
+            SessionStore::open(&session_db_path)
+                .expect("Failed to open session database"),
+        );
+        let session_list = session_store.list_sessions(50).unwrap_or_default();
 
         let model_id = project_config
             .model
@@ -190,6 +222,13 @@ impl RhoApp {
             } else {
                 8_192
             },
+        };
+
+        let event_handler_config = EventHandlerConfig {
+            session_store: Some(session_store.clone()),
+            session_id: None,
+            model_id: model_id.to_string(),
+            cwd: cwd.clone(),
         };
 
         let claude_proxy = Arc::new(AtomicBool::new(false));
@@ -213,6 +252,7 @@ impl RhoApp {
             is_running: false,
             autocomplete: AutocompleteState::default(),
             skills,
+            memories,
             conversation_history: Vec::new(),
             history: Vec::new(),
             history_index: None,
@@ -232,6 +272,10 @@ impl RhoApp {
             available_tools,
             claude_proxy,
             turn_tool_counts: HashMap::new(),
+            session_store,
+            current_session_id: None,
+            session_list,
+            event_handler_config,
             total_input_tokens: 0,
             total_output_tokens: 0,
             session_start: Instant::now(),
@@ -417,6 +461,28 @@ impl RhoApp {
                 // Could open in browser; for now, no-op
                 IcedTask::none()
             }
+            Message::LoadSession(id) => {
+                self.handle_load_session(&id);
+                IcedTask::none()
+            }
+            Message::NewSession => {
+                self.conversation_history.clear();
+                self.messages.clear();
+                self.current_session_id = None;
+                self.total_input_tokens = 0;
+                self.total_output_tokens = 0;
+                self.session_start = Instant::now();
+                IcedTask::none()
+            }
+            Message::DeleteSession(id) => {
+                if let Ok(()) = self.session_store.delete_session(&id) {
+                    self.session_list = self.session_store.list_sessions(50).unwrap_or_default();
+                    if self.current_session_id.as_deref() == Some(&id) {
+                        self.current_session_id = None;
+                    }
+                }
+                IcedTask::none()
+            }
             Message::Noop => IcedTask::none(),
         }
     }
@@ -424,7 +490,7 @@ impl RhoApp {
     fn update_autocomplete(&mut self) {
         match autocomplete::detect_trigger(&self.input) {
             Some(AutocompleteTrigger::Skill { ref query, .. }) => {
-                let suggestions = autocomplete::list_skill_suggestions(&self.skills, query, &self.cwd);
+                let suggestions = autocomplete::list_skill_suggestions(&self.skills, &self.memories, query, &self.cwd);
                 self.autocomplete.active = !suggestions.is_empty();
                 self.autocomplete.trigger = autocomplete::detect_trigger(&self.input);
                 self.autocomplete.suggestions = suggestions;
@@ -492,6 +558,7 @@ impl RhoApp {
         if raw_input.trim() == "/clear" {
             self.conversation_history.clear();
             self.messages.clear();
+            self.current_session_id = None;
             self.total_input_tokens = 0;
             self.total_output_tokens = 0;
             return IcedTask::none();
@@ -503,7 +570,7 @@ impl RhoApp {
         }
 
         let (display_text, resolved_text) =
-            autocomplete::resolve_references(&raw_input, &self.cwd, &self.skills);
+            autocomplete::resolve_references(&raw_input, &self.cwd, &self.skills, &self.memories);
 
         // Check if this is a built-in command (e.g. /research, /plan, /implement)
         let final_text = if let Some(cmd_text) = resolved_text.strip_prefix('/') {
@@ -581,6 +648,12 @@ impl RhoApp {
         if !skills.is_empty() {
             system_prompt.push_str("\n\n");
             system_prompt.push_str(&rho_core::skills::format_skills_prompt(&skills));
+        }
+
+        // Add memories
+        if !self.memories.is_empty() {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&rho_core::memories::format_memories_prompt(&self.memories));
         }
 
         // Add commands
@@ -747,11 +820,87 @@ impl RhoApp {
                 self.conversation_history = messages;
                 self.is_running = false;
                 self.abort_handle = None;
+
+                // Session persistence
+                self.persist_session();
             }
             AgentEvent::ContextCompacted { .. } => {
                 // Could display a notification; for now, silent
             }
             _ => {}
+        }
+    }
+
+    fn persist_session(&mut self) {
+        // Sync current session ID into the event handler config
+        self.event_handler_config.session_id = self.current_session_id.clone();
+
+        let event = AgentEvent::AgentEnd {
+            messages: self.conversation_history.clone(),
+        };
+
+        if let Some(result) = rho_core::event_handler::handle_event(
+            &event,
+            &mut self.event_handler_config,
+        ) {
+            self.apply_event_handler_result(result);
+        }
+    }
+
+    fn apply_event_handler_result(&mut self, result: EventHandlerResult) {
+        if let Some(id) = result.session_id {
+            self.current_session_id = Some(id);
+        }
+        // Refresh sidebar list
+        self.session_list = self.session_store.list_sessions(50).unwrap_or_default();
+    }
+
+    fn handle_load_session(&mut self, session_id: &str) {
+        let messages = match self.session_store.load_messages(session_id) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+
+        self.conversation_history = messages;
+        self.current_session_id = Some(session_id.to_string());
+        self.total_input_tokens = 0;
+        self.total_output_tokens = 0;
+        self.session_start = Instant::now();
+
+        // Rebuild conversation blocks from loaded messages
+        self.messages.clear();
+        for msg in &self.conversation_history {
+            match msg {
+                rho_core::types::Message::User {
+                    content: UserContent::Text(text),
+                    ..
+                } => {
+                    self.messages
+                        .push(ConversationBlock::UserPrompt(text.clone()));
+                }
+                rho_core::types::Message::Assistant { content, usage, .. } => {
+                    self.total_input_tokens += usage.input;
+                    self.total_output_tokens += usage.output;
+                    let text: String = content
+                        .iter()
+                        .filter_map(|c| match c {
+                            Content::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    if !text.is_empty() {
+                        let parsed = markdown::Content::parse(&text);
+                        self.messages.push(ConversationBlock::AssistantMarkdown {
+                            raw: text,
+                            items: parsed.items().to_vec(),
+                        });
+                    }
+                }
+                _ => {
+                    // ToolResult messages are part of history but not shown as blocks
+                }
+            }
         }
     }
 
