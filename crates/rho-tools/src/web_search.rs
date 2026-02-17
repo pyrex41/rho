@@ -1,4 +1,4 @@
-// Web Search tool — search the web using Brave Search API
+// Web Search tool — search via DuckDuckGo (no API key required)
 
 use async_trait::async_trait;
 use rho_core::tool::{AgentTool, ToolError};
@@ -17,6 +17,49 @@ impl WebSearchTool {
     }
 }
 
+/// Parse DuckDuckGo HTML search results into (title, url, snippet) tuples.
+fn parse_ddg_results(html: &str) -> Vec<(String, String, String)> {
+    let mut results = Vec::new();
+
+    // Each result has:
+    //   <a class="result__a" href="URL">TITLE</a>
+    //   <a class="result__snippet" href="...">SNIPPET</a>
+    let re_link =
+        regex::Regex::new(r#"<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>"#)
+            .unwrap();
+    let re_snippet =
+        regex::Regex::new(r#"<a[^>]*class="result__snippet"[^>]*>(.*?)</a>"#).unwrap();
+
+    let links: Vec<_> = re_link.captures_iter(html).collect();
+    let snippets: Vec<_> = re_snippet.captures_iter(html).collect();
+
+    for (i, link_cap) in links.iter().enumerate() {
+        let url = link_cap[1].to_string();
+        let title = strip_html_tags(&link_cap[2]);
+        let snippet = snippets
+            .get(i)
+            .map(|s| strip_html_tags(&s[1]))
+            .unwrap_or_default();
+        results.push((title, url, snippet));
+    }
+
+    results
+}
+
+/// Remove HTML tags from a string.
+fn strip_html_tags(s: &str) -> String {
+    let re = regex::Regex::new(r"<[^>]+>").unwrap();
+    let text = re.replace_all(s, "");
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        .trim()
+        .to_string()
+}
+
 #[async_trait]
 impl AgentTool for WebSearchTool {
     fn name(&self) -> &str {
@@ -28,8 +71,7 @@ impl AgentTool for WebSearchTool {
     }
 
     fn description(&self) -> String {
-        "Search the web and return results (title, URL, snippet). Uses Brave Search API."
-            .to_string()
+        "Search the web via DuckDuckGo and return results (title, URL, snippet).".to_string()
     }
 
     fn parameters_schema(&self) -> Value {
@@ -68,86 +110,117 @@ impl AgentTool for WebSearchTool {
             .map(|v| (v as usize).min(20))
             .unwrap_or(DEFAULT_LIMIT);
 
-        let api_key = std::env::var("BRAVE_SEARCH_API_KEY").ok();
-        let api_key = match api_key {
-            Some(key) if !key.is_empty() => key,
-            _ => {
-                return Ok(ToolResult {
-                    content: vec![Content::Text {
-                        text: "Web search is not configured. Set the BRAVE_SEARCH_API_KEY \
-                               environment variable to enable web search.\n\n\
-                               Get a free API key at: https://brave.com/search/api/"
-                            .to_string(),
-                    }],
-                    details: serde_json::json!({"configured": false}),
-                });
-            }
-        };
-
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .build()
             .map_err(|e| ToolError::ExecutionFailed(format!("failed to build HTTP client: {e}")))?;
 
+        // DuckDuckGo HTML endpoint via POST (works without API key)
         let response = client
-            .get("https://api.search.brave.com/res/v1/web/search")
-            .header("X-Subscription-Token", &api_key)
-            .header("Accept", "application/json")
-            .query(&[("q", query), ("count", &limit.to_string())])
+            .post("https://html.duckduckgo.com/html/")
+            .header("Referer", "https://duckduckgo.com/")
+            .header(
+                "Content-Type",
+                "application/x-www-form-urlencoded",
+            )
+            .body(format!("q={}&b=&kl=", urlencod(query)))
             .send()
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("search request failed: {e}")))?;
 
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
             return Ok(ToolResult {
                 content: vec![Content::Text {
-                    text: format!("Brave Search API returned HTTP {status}: {body}"),
+                    text: format!("DuckDuckGo returned HTTP {status}"),
                 }],
                 details: serde_json::json!({"status": status.as_u16()}),
             });
         }
 
-        let body: Value = response.json().await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("failed to parse search response: {e}"))
+        let html = response.text().await.map_err(|e| {
+            ToolError::ExecutionFailed(format!("failed to read search response: {e}"))
         })?;
 
-        let results = body
-            .get("web")
-            .and_then(|w| w.get("results"))
-            .and_then(|r| r.as_array());
+        let results = parse_ddg_results(&html);
 
-        let text = match results {
-            Some(results) if !results.is_empty() => {
-                let mut output = String::new();
-                for (i, result) in results.iter().take(limit).enumerate() {
-                    let title = result.get("title").and_then(|v| v.as_str()).unwrap_or("");
-                    let url = result.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                    let description = result
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+        if results.is_empty() {
+            return Ok(ToolResult {
+                content: vec![Content::Text {
+                    text: format!("No results found for: {query}"),
+                }],
+                details: serde_json::json!({"query": query, "result_count": 0}),
+            });
+        }
 
-                    if i > 0 {
-                        output.push('\n');
-                    }
-                    output.push_str(&format!(
-                        "{}. {}\n   {}\n   {}\n",
-                        i + 1,
-                        title,
-                        url,
-                        description
-                    ));
-                }
-                output
+        let mut output = String::new();
+        for (i, (title, url, snippet)) in results.iter().take(limit).enumerate() {
+            if i > 0 {
+                output.push('\n');
             }
-            _ => format!("No results found for: {query}"),
-        };
+            output.push_str(&format!("{}. {}\n   {}\n   {}\n", i + 1, title, url, snippet));
+        }
 
         Ok(ToolResult {
-            content: vec![Content::Text { text }],
-            details: serde_json::json!({"query": query, "result_count": results.map(|r| r.len()).unwrap_or(0)}),
+            content: vec![Content::Text { text: output }],
+            details: serde_json::json!({"query": query, "result_count": results.len().min(limit)}),
         })
+    }
+}
+
+/// Percent-encode a query string for use in form data.
+fn urlencod(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(b as char);
+            }
+            b' ' => result.push('+'),
+            _ => {
+                result.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ddg_html() {
+        let html = r#"
+        <div class="result">
+            <a class="result__a" href="https://example.com">Example <b>Title</b></a>
+            <a class="result__snippet" href="https://example.com">This is a <b>snippet</b> of text.</a>
+        </div>
+        <div class="result">
+            <a class="result__a" href="https://other.com">Other Result</a>
+            <a class="result__snippet" href="https://other.com">Another snippet here.</a>
+        </div>
+        "#;
+        let results = parse_ddg_results(html);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "Example Title");
+        assert_eq!(results[0].1, "https://example.com");
+        assert!(results[0].2.contains("snippet"));
+        assert_eq!(results[1].0, "Other Result");
+    }
+
+    #[test]
+    fn test_urlencod() {
+        assert_eq!(urlencod("hello world"), "hello+world");
+        assert_eq!(urlencod("rust+iced"), "rust%2Biced");
+        assert_eq!(urlencod("a&b=c"), "a%26b%3Dc");
+    }
+
+    #[test]
+    fn strip_tags() {
+        assert_eq!(strip_html_tags("<b>bold</b> text"), "bold text");
+        assert_eq!(strip_html_tags("no tags"), "no tags");
+        assert_eq!(strip_html_tags("&amp; &lt;"), "& <");
     }
 }

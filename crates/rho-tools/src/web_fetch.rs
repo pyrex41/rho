@@ -1,4 +1,4 @@
-// Web Fetch tool — fetch a URL and return its text content
+// Web Fetch tool — fetch a URL and return its content as markdown/text
 
 use async_trait::async_trait;
 use rho_core::tool::{AgentTool, ToolError};
@@ -92,8 +92,7 @@ impl AgentTool for WebFetchTool {
     }
 
     fn description(&self) -> String {
-        "Fetch a URL and return its text content. HTML is automatically converted to plain text."
-            .to_string()
+        "Fetch a URL and return its content as clean markdown/text.".to_string()
     }
 
     fn parameters_schema(&self) -> Value {
@@ -107,6 +106,10 @@ impl AgentTool for WebFetchTool {
                 "max_chars": {
                     "type": "integer",
                     "description": "Maximum characters to return (default 50000)"
+                },
+                "raw": {
+                    "type": "boolean",
+                    "description": "If true, fetch directly instead of using the markdown reader (default false)"
                 }
             },
             "required": ["url"]
@@ -132,15 +135,45 @@ impl AgentTool for WebFetchTool {
             .map(|v| v as usize)
             .unwrap_or(DEFAULT_MAX_CHARS);
 
+        let raw = params
+            .get("raw")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .user_agent("rho/0.1")
+            .redirect(reqwest::redirect::Policy::limited(5))
             .build()
             .map_err(|e| ToolError::ExecutionFailed(format!("failed to build HTTP client: {e}")))?;
 
-        let response = client.get(url).send().await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("request failed: {e}"))
-        })?;
+        if !raw {
+            // Try markdown.new reader service first — returns clean markdown
+            let reader_url = format!("https://markdown.new/{}", url);
+            match client.get(&reader_url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    let text = resp.text().await.map_err(|e| {
+                        ToolError::ExecutionFailed(format!("failed to read response: {e}"))
+                    })?;
+                    if !text.is_empty() {
+                        let text = truncate_text(&text, max_chars);
+                        return Ok(ToolResult {
+                            content: vec![Content::Text { text }],
+                            details: serde_json::json!({"source": "markdown.new"}),
+                        });
+                    }
+                }
+                _ => {} // Fall through to direct fetch
+            }
+        }
+
+        // Direct fetch fallback
+        let response = client
+            .get(url)
+            .header("Accept", "text/markdown, text/html;q=0.9, */*;q=0.8")
+            .send()
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("request failed: {e}")))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -163,7 +196,10 @@ impl AgentTool for WebFetchTool {
             ToolError::ExecutionFailed(format!("failed to read response body: {e}"))
         })?;
 
-        let text = if content_type.contains("html") {
+        // If we got markdown back (from Cloudflare's markdown-for-agents), use it directly
+        let text = if content_type.contains("markdown") {
+            body
+        } else if content_type.contains("html") {
             html_to_text(&body)
         } else {
             body
@@ -173,7 +209,7 @@ impl AgentTool for WebFetchTool {
 
         Ok(ToolResult {
             content: vec![Content::Text { text }],
-            details: serde_json::json!({"status": status.as_u16(), "content_type": content_type}),
+            details: serde_json::json!({"source": "direct", "content_type": content_type}),
         })
     }
 }

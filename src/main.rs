@@ -123,8 +123,8 @@ Available tools:
 - grep: Search file contents with regex (returns matches with LINE:HASH|content format)
 - find: Find files by glob pattern (respects .gitignore)
 - task: Launch a subagent to handle a task in a separate context
-- web_fetch: Fetch a URL and return its text content (HTML auto-converted to plain text)
-- web_search: Search the web and return results (requires BRAVE_SEARCH_API_KEY)
+- web_fetch: Fetch a URL and return its content as clean markdown/text
+- web_search: Search the web via DuckDuckGo and return results (title, URL, snippet)
 
 When editing files, first read them to get LINE:HASH references, then use edit with those anchors. \
 For new files, use write. For small changes, use edit. For running tests or builds, use bash.";
