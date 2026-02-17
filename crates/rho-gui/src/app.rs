@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -21,7 +22,8 @@ pub const INPUT_ID: &str = "rho-input";
 const BASE_SYSTEM_PROMPT: &str = "\
 You are a coding assistant with tools for reading, editing, searching files and running commands.
 
-Current date: {current_date}
+The current date is {current_date}. The current month is {current_month_year}. \
+You MUST use this year when searching for recent information, documentation, or current events.
 
 Available tools:
 {tool_list}
@@ -29,10 +31,13 @@ Available tools:
 When editing files, first read them to get LINE:HASH references, then use edit with those anchors. \
 For new files, use write. For small changes, use edit. For running tests or builds, use bash.
 
-Web search tips: Always include the current year ({current_year}) in search queries for recent information. \
-Use multiple searches with different queries to get comprehensive results. \
-Fetch primary sources (e.g. github.com/trending, trendshift.io) rather than relying only on blog posts. \
-Cite your sources with URLs.";
+Web search guidance:
+- IMPORTANT: Always include the year {current_year} in search queries for recent information. \
+For example, if asked about 'latest trending repos', search for 'trending github repos {current_year}', NOT without a year.
+- Use multiple searches with different queries to get comprehensive results. A single search is rarely enough.
+- Fetch primary sources directly (e.g. github.com/trending, trendshift.io, official docs) rather than relying only on blog posts.
+- After searching, use web_fetch on the most promising URLs to get detailed information.
+- Always cite your sources with URLs in your response.";
 
 /// Short descriptions for each tool, used in the dynamic system prompt.
 fn tool_description(name: &str) -> &'static str {
@@ -59,10 +64,12 @@ fn build_system_prompt_with_tools(tools: &[(Arc<dyn AgentTool>, bool)]) -> Strin
         .join("\n");
     let now = chrono::Local::now();
     let current_date = now.format("%Y-%m-%d %H:%M %Z").to_string();
+    let current_month_year = now.format("%B %Y").to_string();
     let current_year = now.format("%Y").to_string();
     BASE_SYSTEM_PROMPT
         .replace("{tool_list}", &tool_list)
         .replace("{current_date}", &current_date)
+        .replace("{current_month_year}", &current_month_year)
         .replace("{current_year}", &current_year)
 }
 
@@ -127,6 +134,8 @@ pub struct RhoApp {
     pub project_config: ProjectConfig,
     // Tools (modular activation)
     pub available_tools: Vec<(Arc<dyn AgentTool>, bool)>,
+    // Claude proxy for web tools (shared with tool instances)
+    pub claude_proxy: Arc<AtomicBool>,
     // Tool summary tracking per turn
     pub turn_tool_counts: HashMap<String, usize>,
     // Sidebar data
@@ -148,6 +157,7 @@ pub enum Message {
     KeyEvent(keyboard::Event),
     ToggleToolExpand(String),
     ToggleTool(String),
+    ToggleClaudeProxy,
     UrlClicked(markdown::Uri),
     Noop,
 }
@@ -182,6 +192,7 @@ impl RhoApp {
             },
         };
 
+        let claude_proxy = Arc::new(AtomicBool::new(false));
         let available_tools: Vec<(Arc<dyn AgentTool>, bool)> = vec![
             (Arc::new(rho_tools::read::ReadTool::with_cwd(cwd.clone())), true),
             (Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone())), true),
@@ -190,8 +201,8 @@ impl RhoApp {
             (Arc::new(rho_tools::grep::GrepTool::new(cwd.clone())), true),
             (Arc::new(rho_tools::find::FindTool::new(cwd.clone())), true),
             (Arc::new(rho_tools::task::TaskTool::new(cwd.clone())), true),
-            (Arc::new(rho_tools::web_fetch::WebFetchTool::new()), true),
-            (Arc::new(rho_tools::web_search::WebSearchTool::new()), true),
+            (Arc::new(rho_tools::web_fetch::WebFetchTool::with_claude_proxy(claude_proxy.clone())), true),
+            (Arc::new(rho_tools::web_search::WebSearchTool::with_claude_proxy(claude_proxy.clone())), true),
         ];
 
         let app = Self {
@@ -219,6 +230,7 @@ impl RhoApp {
             model,
             project_config,
             available_tools,
+            claude_proxy,
             turn_tool_counts: HashMap::new(),
             total_input_tokens: 0,
             total_output_tokens: 0,
@@ -394,6 +406,11 @@ impl RhoApp {
                         break;
                     }
                 }
+                IcedTask::none()
+            }
+            Message::ToggleClaudeProxy => {
+                let prev = self.claude_proxy.load(Ordering::Relaxed);
+                self.claude_proxy.store(!prev, Ordering::Relaxed);
                 IcedTask::none()
             }
             Message::UrlClicked(_url) => {

@@ -1,4 +1,8 @@
 // Web Fetch tool — fetch a URL and return its content as markdown/text
+// Optionally proxies through `claude -p` with built-in WebFetch tool.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use rho_core::tool::{AgentTool, ToolError};
@@ -10,11 +14,25 @@ const DEFAULT_MAX_CHARS: usize = 50_000;
 const TRUNCATION_EDGE: usize = 5_000;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 
-pub struct WebFetchTool;
+pub struct WebFetchTool {
+    claude_proxy: Option<Arc<AtomicBool>>,
+}
 
 impl WebFetchTool {
     pub fn new() -> Self {
-        Self
+        Self { claude_proxy: None }
+    }
+
+    pub fn with_claude_proxy(flag: Arc<AtomicBool>) -> Self {
+        Self {
+            claude_proxy: Some(flag),
+        }
+    }
+
+    fn use_claude(&self) -> bool {
+        self.claude_proxy
+            .as_ref()
+            .map_or(false, |f| f.load(Ordering::Relaxed))
     }
 }
 
@@ -81,6 +99,51 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     )
 }
 
+/// Fetch a URL via `claude -p` with the built-in WebFetch tool.
+async fn fetch_via_claude(url: &str, max_chars: usize) -> Result<ToolResult, ToolError> {
+    let prompt = format!(
+        "Fetch this URL and return its full content as markdown: {url}\n\n\
+         Return the page content directly, without commentary or summarization. \
+         Just the content."
+    );
+
+    let output = tokio::process::Command::new("claude")
+        .arg("-p")
+        .arg(&prompt)
+        .arg("--tools")
+        .arg("WebFetch")
+        .arg("--permission-mode")
+        .arg("bypassPermissions")
+        .arg("--model")
+        .arg("haiku")
+        .arg("--no-session-persistence")
+        .env("CLAUDECODE", "")
+        .output()
+        .await
+        .map_err(|e| {
+            ToolError::ExecutionFailed(format!(
+                "failed to run claude CLI: {e}. Is Claude Code installed?"
+            ))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ToolError::ExecutionFailed(format!(
+            "claude exited with {}: {}",
+            output.status,
+            stderr.chars().take(500).collect::<String>()
+        )));
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    let text = truncate_text(&text, max_chars);
+
+    Ok(ToolResult {
+        content: vec![Content::Text { text }],
+        details: serde_json::json!({"source": "claude-proxy"}),
+    })
+}
+
 #[async_trait]
 impl AgentTool for WebFetchTool {
     fn name(&self) -> &str {
@@ -140,6 +203,12 @@ impl AgentTool for WebFetchTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        // Claude proxy mode: shell out to `claude -p`
+        if self.use_claude() {
+            return fetch_via_claude(url, max_chars).await;
+        }
+
+        // Native mode
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .user_agent("rho/0.1")

@@ -1,4 +1,8 @@
 // Web Search tool — search via DuckDuckGo (no API key required)
+// Optionally proxies through `claude -p` with built-in WebSearch tool.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use rho_core::tool::{AgentTool, ToolError};
@@ -9,11 +13,25 @@ use tokio_util::sync::CancellationToken;
 const DEFAULT_LIMIT: usize = 5;
 const REQUEST_TIMEOUT_SECS: u64 = 15;
 
-pub struct WebSearchTool;
+pub struct WebSearchTool {
+    claude_proxy: Option<Arc<AtomicBool>>,
+}
 
 impl WebSearchTool {
     pub fn new() -> Self {
-        Self
+        Self { claude_proxy: None }
+    }
+
+    pub fn with_claude_proxy(flag: Arc<AtomicBool>) -> Self {
+        Self {
+            claude_proxy: Some(flag),
+        }
+    }
+
+    fn use_claude(&self) -> bool {
+        self.claude_proxy
+            .as_ref()
+            .map_or(false, |f| f.load(Ordering::Relaxed))
     }
 }
 
@@ -58,6 +76,64 @@ fn strip_html_tags(s: &str) -> String {
         .replace("&nbsp;", " ")
         .trim()
         .to_string()
+}
+
+/// Execute a web search via `claude -p` with the built-in WebSearch tool.
+async fn search_via_claude(query: &str, limit: usize) -> Result<ToolResult, ToolError> {
+    let prompt = format!(
+        "Search the web for: {query}\n\n\
+         Return exactly the top {limit} results as a numbered list. \
+         For each result, include:\n\
+         1. Title\n\
+         2. URL\n\
+         3. A brief snippet/description\n\n\
+         Format each result as:\n\
+         N. TITLE\n   URL\n   SNIPPET\n\n\
+         Include a Sources: section at the end with URLs."
+    );
+
+    let output = tokio::process::Command::new("claude")
+        .arg("-p")
+        .arg(&prompt)
+        .arg("--tools")
+        .arg("WebSearch,WebFetch")
+        .arg("--permission-mode")
+        .arg("bypassPermissions")
+        .arg("--model")
+        .arg("haiku")
+        .arg("--no-session-persistence")
+        .env("CLAUDECODE", "")
+        .output()
+        .await
+        .map_err(|e| {
+            ToolError::ExecutionFailed(format!(
+                "failed to run claude CLI: {e}. Is Claude Code installed?"
+            ))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ToolError::ExecutionFailed(format!(
+            "claude exited with {}: {}",
+            output.status,
+            stderr.chars().take(500).collect::<String>()
+        )));
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    if text.trim().is_empty() {
+        return Ok(ToolResult {
+            content: vec![Content::Text {
+                text: format!("No results found for: {query}"),
+            }],
+            details: serde_json::json!({"source": "claude-proxy", "query": query}),
+        });
+    }
+
+    Ok(ToolResult {
+        content: vec![Content::Text { text }],
+        details: serde_json::json!({"source": "claude-proxy", "query": query}),
+    })
 }
 
 #[async_trait]
@@ -110,6 +186,12 @@ impl AgentTool for WebSearchTool {
             .map(|v| (v as usize).min(20))
             .unwrap_or(DEFAULT_LIMIT);
 
+        // Claude proxy mode: shell out to `claude -p`
+        if self.use_claude() {
+            return search_via_claude(query, limit).await;
+        }
+
+        // Native DuckDuckGo mode
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")

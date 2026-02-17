@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 
 use iced::widget::{
     button, column, container, markdown, row, scrollable, text, text_input, Column,
@@ -129,6 +130,36 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         });
         col = col.push(btn);
     }
+
+    // Claude proxy toggle
+    let proxy_on = app.claude_proxy.load(Ordering::Relaxed);
+    let proxy_color = if proxy_on {
+        color!(0x7aa2f7)
+    } else {
+        color!(0x565f89)
+    };
+    let proxy_indicator = if proxy_on { "on " } else { "off" };
+    let proxy_label = format!("{proxy_indicator}  claude proxy");
+    let proxy_btn = button(
+        text(proxy_label)
+            .size(12)
+            .font(FONT_MONO)
+            .color(proxy_color),
+    )
+    .on_press(Message::ToggleClaudeProxy)
+    .width(Length::Fill)
+    .padding([2, 4])
+    .style(move |_theme: &Theme, status| match status {
+        button::Status::Hovered => button::Style {
+            background: Some(color!(0x283457).into()),
+            ..button::Style::default()
+        },
+        _ => button::Style {
+            background: None,
+            ..button::Style::default()
+        },
+    });
+    col = col.push(proxy_btn);
 
     // Error
     if let Some(ref err) = app.error {

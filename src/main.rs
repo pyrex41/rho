@@ -129,10 +129,13 @@ Available tools:
 When editing files, first read them to get LINE:HASH references, then use edit with those anchors. \
 For new files, use write. For small changes, use edit. For running tests or builds, use bash.
 
-Web search tips: Always include the current year in search queries for recent information. \
-Use multiple searches with different queries to get comprehensive results. \
-Fetch primary sources (e.g. github.com/trending, trendshift.io) rather than relying only on blog posts. \
-Cite your sources with URLs.";
+Web search guidance:
+- IMPORTANT: You MUST include the current year in search queries for recent information. \
+For example, if asked about 'latest trending repos', search for 'trending github repos' with the year, NOT without a year.
+- Use multiple searches with different queries to get comprehensive results. A single search is rarely enough.
+- Fetch primary sources directly (e.g. github.com/trending, trendshift.io, official docs) rather than relying only on blog posts.
+- After searching, use web_fetch on the most promising URLs to get detailed information.
+- Always cite your sources with URLs in your response.";
 
 fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>) -> Vec<Arc<dyn AgentTool>> {
     let all_tools: Vec<Arc<dyn AgentTool>> = vec![
@@ -188,12 +191,18 @@ fn build_system_prompt(
     // Inject current date/time and year
     let now = chrono::Local::now();
     let date_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
+    let month_year_str = now.format("%B %Y").to_string();
     let year_str = now.format("%Y").to_string();
-    if !prompt.contains("Current date") {
-        prompt = format!("{}\n\nCurrent date: {}", prompt, date_str);
+    if !prompt.contains("current date") {
+        prompt = format!(
+            "{}\n\nThe current date is {}. The current month is {}. \
+             You MUST use this year when searching for recent information.",
+            prompt, date_str, month_year_str
+        );
     }
-    // Replace year placeholder in web search tips
-    prompt = prompt.replace("the current year", &format!("the current year ({})", year_str));
+    // Replace year placeholder in web search guidance
+    prompt = prompt.replace("the current year", &format!("the current year ({})", year_str))
+        .replace("with the year", &format!("with the year {}", year_str));
 
     // Add skills
     let skill_dirs = rho_core::skills::default_skill_dirs(cwd);
