@@ -21,6 +21,8 @@ pub const INPUT_ID: &str = "rho-input";
 const BASE_SYSTEM_PROMPT: &str = "\
 You are a coding assistant with tools for reading, editing, searching files and running commands.
 
+Current date: {current_date}
+
 Available tools:
 {tool_list}
 
@@ -50,7 +52,11 @@ fn build_system_prompt_with_tools(tools: &[(Arc<dyn AgentTool>, bool)]) -> Strin
         .map(|(t, _)| format!("- {}: {}", t.name(), tool_description(t.name())))
         .collect::<Vec<_>>()
         .join("\n");
-    BASE_SYSTEM_PROMPT.replace("{tool_list}", &tool_list)
+    let now = chrono::Local::now();
+    let current_date = now.format("%Y-%m-%d %H:%M %Z").to_string();
+    BASE_SYSTEM_PROMPT
+        .replace("{tool_list}", &tool_list)
+        .replace("{current_date}", &current_date)
 }
 
 /// A block in the conversation view.

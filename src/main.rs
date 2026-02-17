@@ -180,6 +180,13 @@ fn build_system_prompt(
 
     let mut prompt = base.to_string();
 
+    // Inject current date/time
+    let now = chrono::Local::now();
+    let date_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
+    if !prompt.contains("Current date") {
+        prompt = format!("{}\n\nCurrent date: {}", prompt, date_str);
+    }
+
     // Add skills
     let skill_dirs = rho_core::skills::default_skill_dirs(cwd);
     let skills = rho_core::skills::discover_skills(&skill_dirs);
