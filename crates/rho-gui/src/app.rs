@@ -27,7 +27,12 @@ Available tools:
 {tool_list}
 
 When editing files, first read them to get LINE:HASH references, then use edit with those anchors. \
-For new files, use write. For small changes, use edit. For running tests or builds, use bash.";
+For new files, use write. For small changes, use edit. For running tests or builds, use bash.
+
+Web search tips: Always include the current year ({current_year}) in search queries for recent information. \
+Use multiple searches with different queries to get comprehensive results. \
+Fetch primary sources (e.g. github.com/trending, trendshift.io) rather than relying only on blog posts. \
+Cite your sources with URLs.";
 
 /// Short descriptions for each tool, used in the dynamic system prompt.
 fn tool_description(name: &str) -> &'static str {
@@ -54,9 +59,11 @@ fn build_system_prompt_with_tools(tools: &[(Arc<dyn AgentTool>, bool)]) -> Strin
         .join("\n");
     let now = chrono::Local::now();
     let current_date = now.format("%Y-%m-%d %H:%M %Z").to_string();
+    let current_year = now.format("%Y").to_string();
     BASE_SYSTEM_PROMPT
         .replace("{tool_list}", &tool_list)
         .replace("{current_date}", &current_date)
+        .replace("{current_year}", &current_year)
 }
 
 /// A block in the conversation view.

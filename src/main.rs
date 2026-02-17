@@ -127,7 +127,12 @@ Available tools:
 - web_search: Search the web via DuckDuckGo and return results (title, URL, snippet)
 
 When editing files, first read them to get LINE:HASH references, then use edit with those anchors. \
-For new files, use write. For small changes, use edit. For running tests or builds, use bash.";
+For new files, use write. For small changes, use edit. For running tests or builds, use bash.
+
+Web search tips: Always include the current year in search queries for recent information. \
+Use multiple searches with different queries to get comprehensive results. \
+Fetch primary sources (e.g. github.com/trending, trendshift.io) rather than relying only on blog posts. \
+Cite your sources with URLs.";
 
 fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>) -> Vec<Arc<dyn AgentTool>> {
     let all_tools: Vec<Arc<dyn AgentTool>> = vec![
@@ -180,12 +185,15 @@ fn build_system_prompt(
 
     let mut prompt = base.to_string();
 
-    // Inject current date/time
+    // Inject current date/time and year
     let now = chrono::Local::now();
     let date_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
+    let year_str = now.format("%Y").to_string();
     if !prompt.contains("Current date") {
         prompt = format!("{}\n\nCurrent date: {}", prompt, date_str);
     }
+    // Replace year placeholder in web search tips
+    prompt = prompt.replace("the current year", &format!("the current year ({})", year_str));
 
     // Add skills
     let skill_dirs = rho_core::skills::default_skill_dirs(cwd);
