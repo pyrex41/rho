@@ -25,7 +25,6 @@ path = "src/main.rs"
 rho-core = { path = "crates/rho-core" }
 rho-provider = { path = "crates/rho-provider" }
 rho-tools = { path = "crates/rho-tools" }
-anthropic-auth = { path = "crates/anthropic-auth" }
 tokio = { workspace = true }
 clap = { workspace = true }
 futures = { workspace = true }
@@ -55,3 +54,4 @@ similar = "2"
 chrono = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
+toml = "0.8"

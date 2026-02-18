@@ -1,10 +1,14 @@
 pub mod error;
+pub mod openai;
+pub mod openai_request;
+pub mod openai_response;
 pub mod request;
 pub mod response;
 pub mod sse;
 
 use futures::StreamExt;
 use rho_core::event_stream::{EventStream, EventStreamProducer};
+use rho_core::models::{ModelConfig, ProviderType};
 use rho_core::provider_types::{AssistantStream, StreamContext, StreamFn, StreamOptions};
 use rho_core::types::{AssistantStreamEvent, Message, Model, StopReason};
 
@@ -110,13 +114,67 @@ async fn do_stream_inner(
     Ok(handler.build_final_message())
 }
 
+/// Select the appropriate `StreamFn` for a given model config.
+///
+/// Passes provider-managed server tools (e.g. xAI's `web_search`) through to the
+/// OpenAI-compatible provider. Anthropic models ignore `server_tools`.
+pub fn stream_fn_for_model(config: &ModelConfig) -> StreamFn {
+    match config.provider {
+        ProviderType::Anthropic => anthropic_stream_fn(),
+        ProviderType::OpenAi => openai::openai_stream_fn(config.server_tools.clone()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rho_core::models::ModelConfig;
+
+    fn anthropic_config() -> ModelConfig {
+        ModelConfig {
+            id: "claude-sonnet".into(),
+            provider: ProviderType::Anthropic,
+            model_id: "claude-sonnet-4-5-20250929".into(),
+            base_url: String::new(),
+            api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            context_window: 200_000,
+            max_tokens: 8_192,
+            thinking: false,
+            server_tools: None,
+        }
+    }
+
+    fn openai_config() -> ModelConfig {
+        ModelConfig {
+            id: "grok-3".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-3".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: false,
+            server_tools: Some(vec!["web_search".into()]),
+        }
+    }
 
     #[test]
     fn test_anthropic_stream_fn_returns_closure() {
-        // Compile-time check that the closure has the right signature
         let _f = anthropic_stream_fn();
+    }
+
+    #[test]
+    fn test_openai_stream_fn_returns_closure() {
+        let _f = openai::openai_stream_fn(None);
+    }
+
+    #[test]
+    fn test_stream_fn_for_model_anthropic() {
+        let _f = stream_fn_for_model(&anthropic_config());
+    }
+
+    #[test]
+    fn test_stream_fn_for_model_openai_with_server_tools() {
+        let _f = stream_fn_for_model(&openai_config());
     }
 }

@@ -1,4 +1,5 @@
 pub mod agent_loop;
+pub mod models;
 pub mod commands;
 pub mod compaction;
 pub mod config;

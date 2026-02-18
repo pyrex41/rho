@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use rho_core::agent_loop::{agent_loop, AgentLoopConfig};
 use rho_core::compaction;
 use rho_core::config::load_project_config;
+use rho_core::models::{ModelConfig, ModelRegistry, ProviderType};
 use rho_core::tool::AgentTool;
 use rho_core::types::*;
 
@@ -24,8 +25,8 @@ struct Cli {
     /// The prompt to send to the agent
     prompt: Option<String>,
 
-    /// Model ID to use
-    #[arg(long, default_value = "claude-sonnet-4-5-20250929")]
+    /// Model ID to use (registry ID like "claude-sonnet", or raw model ID)
+    #[arg(long, default_value = "claude-sonnet")]
     model: String,
 
     /// Thinking level (off, minimal, low, medium, high)
@@ -160,19 +161,41 @@ fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>) -> Vec<Arc<dyn Agen
     }
 }
 
-fn build_model(model_id: &str, thinking: ThinkingLevel) -> Model {
-    Model {
-        id: model_id.to_string(),
-        name: model_id.to_string(),
-        provider: "anthropic".into(),
+/// Resolve a model name (registry ID or raw model ID) to a ModelConfig.
+/// For raw IDs not in the registry, a synthetic config is created.
+fn resolve_model_config(
+    model_arg: &str,
+    registry: &ModelRegistry,
+    thinking: ThinkingLevel,
+) -> ModelConfig {
+    if let Some(config) = registry.get(model_arg) {
+        return config.clone();
+    }
+
+    // Fallback: treat as raw model ID, infer provider from name
+    let provider = if model_arg.contains("claude") {
+        ProviderType::Anthropic
+    } else {
+        ProviderType::OpenAi
+    };
+
+    ModelConfig {
+        id: model_arg.to_string(),
+        provider: provider.clone(),
+        model_id: model_arg.to_string(),
         base_url: String::new(),
-        reasoning: model_id.contains("opus") || thinking != ThinkingLevel::Off,
+        api_key_env: match provider {
+            ProviderType::Anthropic => Some("ANTHROPIC_API_KEY".into()),
+            ProviderType::OpenAi => Some("OPENAI_API_KEY".into()),
+        },
         context_window: 200_000,
         max_tokens: if thinking != ThinkingLevel::Off {
             16_384
         } else {
             8_192
         },
+        thinking: model_arg.contains("opus") || thinking != ThinkingLevel::Off,
+        server_tools: None,
     }
 }
 
@@ -283,7 +306,7 @@ async fn main() -> Result<()> {
 
             let model_id = model
                 .or(project_config.model.clone())
-                .unwrap_or_else(|| "claude-sonnet-4-5-20250929".into());
+                .unwrap_or_else(|| "claude-sonnet".into());
             let thinking_str = thinking.unwrap_or_else(|| {
                 project_config
                     .thinking
@@ -292,12 +315,16 @@ async fn main() -> Result<()> {
             });
             let thinking_level = parse_thinking(&thinking_str);
 
+            let registry = ModelRegistry::load();
+            let model_config = resolve_model_config(&model_id, &registry, thinking_level);
+
             let api_key = match api_key {
                 Some(key) => key,
-                None => anthropic_auth::get_token().context("Failed to get API key")?,
+                None => ModelRegistry::resolve_api_key(&model_config)
+                    .map_err(|e| anyhow::anyhow!(e))?,
             };
 
-            let model = build_model(&model_id, thinking_level);
+            let model = ModelRegistry::to_model(&model_config);
 
             // Plan mode defaults to read-only tools
             let default_tools = if loop_runner::LoopMode::from_str(&mode) == loop_runner::LoopMode::Plan {
@@ -328,7 +355,7 @@ async fn main() -> Result<()> {
                 thinking: thinking_level,
                 validation_commands: project_config.validation_commands,
                 cwd,
-                stream_fn: rho_provider::anthropic_stream_fn(),
+                stream_fn: rho_provider::stream_fn_for_model(&model_config),
             };
 
             loop_runner::run_loop(loop_config, cancel).await?;
@@ -356,17 +383,22 @@ async fn main() -> Result<()> {
             let model_id = project_config
                 .model
                 .as_deref()
-                .unwrap_or(&cli.model);
+                .unwrap_or(&cli.model)
+                .to_string();
             let thinking = project_config
                 .thinking
                 .unwrap_or_else(|| parse_thinking(&cli.thinking));
 
+            let registry = ModelRegistry::load();
+            let model_config = resolve_model_config(&model_id, &registry, thinking);
+
             let api_key = match &cli.api_key {
                 Some(key) => key.clone(),
-                None => anthropic_auth::get_token().context("Failed to get API key")?,
+                None => ModelRegistry::resolve_api_key(&model_config)
+                    .map_err(|e| anyhow::anyhow!(e))?,
             };
 
-            let model = build_model(model_id, thinking);
+            let model = ModelRegistry::to_model(&model_config);
 
             // Merge tool restrictions: CLI flag overrides config
             let allowed_tools = cli.tools.or(project_config.allowed_tools.clone());
@@ -400,7 +432,7 @@ async fn main() -> Result<()> {
                 tools,
                 thinking,
                 max_tokens: None,
-                stream_fn: rho_provider::anthropic_stream_fn(),
+                stream_fn: rho_provider::stream_fn_for_model(&model_config),
                 get_steering_messages: None,
                 get_follow_up_messages: None,
                 transform_messages,

@@ -12,6 +12,7 @@ use rho_core::agent_loop::{agent_loop, AgentLoopConfig};
 use rho_core::compaction;
 use rho_core::config::ProjectConfig;
 use rho_core::memories::MemoryMetadata;
+use rho_core::models::{ModelConfig, ModelRegistry, ProviderType};
 use rho_core::skills::SkillMetadata;
 use rho_core::tool::AgentTool;
 use rho_core::types::*;
@@ -136,6 +137,8 @@ pub struct RhoApp {
     api_key: Option<String>,
     pub cwd: PathBuf,
     pub model: Model,
+    pub model_config: ModelConfig,
+    pub model_registry: ModelRegistry,
     pub project_config: ProjectConfig,
     // Tools (modular activation)
     pub available_tools: Vec<(Arc<dyn AgentTool>, bool)>,
@@ -172,12 +175,15 @@ pub enum Message {
     LoadSession(String),
     NewSession,
     DeleteSession(String),
+    SwitchModel(String),
     Noop,
 }
 
 impl RhoApp {
     pub fn new() -> (Self, IcedTask<Message>) {
-        let api_key = anthropic_auth::get_token().ok();
+        // Temporarily use the default Anthropic token for initial load;
+        // will be properly resolved once model_config is built below.
+        let initial_api_key = anthropic_auth::get_token().ok();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         let skill_dirs = rho_core::skills::default_skill_dirs(&cwd);
@@ -207,22 +213,26 @@ impl RhoApp {
         let model_id = project_config
             .model
             .as_deref()
-            .unwrap_or("claude-sonnet-4-5-20250929");
+            .unwrap_or("claude-sonnet")
+            .to_string();
         let thinking = project_config.thinking.unwrap_or(ThinkingLevel::Off);
 
-        let model = Model {
-            id: model_id.into(),
-            name: model_id.into(),
-            provider: "anthropic".into(),
-            base_url: String::new(),
-            reasoning: model_id.contains("opus") || thinking != ThinkingLevel::Off,
-            context_window: 200_000,
-            max_tokens: if thinking != ThinkingLevel::Off {
-                16_384
-            } else {
-                8_192
-            },
-        };
+        let model_registry = ModelRegistry::load();
+        let model_config = model_registry
+            .get(&model_id)
+            .cloned()
+            .unwrap_or_else(|| ModelConfig {
+                id: model_id.clone(),
+                provider: ProviderType::Anthropic,
+                model_id: model_id.clone(),
+                base_url: String::new(),
+                api_key_env: Some("ANTHROPIC_API_KEY".into()),
+                context_window: 200_000,
+                max_tokens: if thinking != ThinkingLevel::Off { 16_384 } else { 8_192 },
+                thinking: thinking != ThinkingLevel::Off,
+                server_tools: None,
+            });
+        let model = ModelRegistry::to_model(&model_config);
 
         let event_handler_config = EventHandlerConfig {
             session_store: Some(session_store.clone()),
@@ -243,6 +253,11 @@ impl RhoApp {
             (Arc::new(rho_tools::web_fetch::WebFetchTool::with_claude_proxy(claude_proxy.clone())), true),
             (Arc::new(rho_tools::web_search::WebSearchTool::with_claude_proxy(claude_proxy.clone())), true),
         ];
+
+        // Resolve API key for the configured model
+        let api_key = ModelRegistry::resolve_api_key(&model_config)
+            .ok()
+            .or(initial_api_key);
 
         let app = Self {
             messages: Vec::new(),
@@ -268,6 +283,8 @@ impl RhoApp {
             api_key,
             cwd,
             model,
+            model_config,
+            model_registry,
             project_config,
             available_tools,
             claude_proxy,
@@ -483,6 +500,34 @@ impl RhoApp {
                 }
                 IcedTask::none()
             }
+            Message::SwitchModel(model_id) => {
+                if let Some(config) = self.model_registry.get(&model_id).cloned() {
+                    match ModelRegistry::resolve_api_key(&config) {
+                        Ok(key) => {
+                            self.model_config = config.clone();
+                            self.model = ModelRegistry::to_model(&config);
+                            self.api_key = Some(key);
+                            self.error = None;
+                            let provider = match config.provider {
+                                ProviderType::Anthropic => "anthropic",
+                                ProviderType::OpenAi => "openai",
+                            };
+                            let msg = format!("Switched to **{}** ({})", model_id, provider);
+                            self.messages.push(ConversationBlock::AssistantMarkdown {
+                                raw: msg.clone(),
+                                items: markdown::Content::parse(&msg).items().to_vec(),
+                            });
+                        }
+                        Err(e) => {
+                            self.error =
+                                Some(format!("Cannot switch to {}: {}", model_id, e));
+                        }
+                    }
+                } else {
+                    self.error = Some(format!("Unknown model: '{}'", model_id));
+                }
+                IcedTask::none()
+            }
             Message::Noop => IcedTask::none(),
         }
     }
@@ -567,6 +612,39 @@ impl RhoApp {
         // Handle /compact command
         if raw_input.trim() == "/compact" {
             return self.handle_compact();
+        }
+
+        // Handle /model command
+        if raw_input.trim() == "/model" || raw_input.trim().starts_with("/model ") {
+            let args = raw_input.trim().strip_prefix("/model").unwrap_or("").trim();
+            if args.is_empty() {
+                // List all available models
+                let model_list = self
+                    .model_registry
+                    .list()
+                    .iter()
+                    .map(|m| {
+                        let provider = match m.provider {
+                            ProviderType::Anthropic => "anthropic",
+                            ProviderType::OpenAi => "openai",
+                        };
+                        let current = if m.id == self.model_config.id { " ◀ current" } else { "" };
+                        format!("- **{}** ({}){}  ", m.id, provider, current)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.messages.push(ConversationBlock::UserPrompt(
+                    format!("/model"),
+                ));
+                let model_list_msg = format!("Available models:\n\n{}", model_list);
+                self.messages.push(ConversationBlock::AssistantMarkdown {
+                    raw: model_list_msg.clone(),
+                    items: markdown::Content::parse(&model_list_msg).items().to_vec(),
+                });
+                return IcedTask::none();
+            } else {
+                return self.update(Message::SwitchModel(args.to_string()));
+            }
         }
 
         let (display_text, resolved_text) =
@@ -716,7 +794,7 @@ impl RhoApp {
             tools,
             thinking,
             max_tokens: None,
-            stream_fn: rho_provider::anthropic_stream_fn(),
+            stream_fn: rho_provider::stream_fn_for_model(&self.model_config),
             get_steering_messages: None,
             get_follow_up_messages: None,
             transform_messages,

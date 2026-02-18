@@ -57,10 +57,32 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         .push(text("PROJECT").size(11).color(color!(0x565f89)))
         .push(text(dir_name).size(14));
 
-    // Model
-    col = col
-        .push(text("MODEL").size(11).color(color!(0x565f89)))
-        .push(text(app.model.name.as_str()).size(14));
+    // Model picker
+    col = col.push(text("MODEL").size(11).color(color!(0x565f89)));
+    for m in app.model_registry.list() {
+        let is_current = m.id == app.model_config.id;
+        let label = if is_current {
+            format!("▶ {}", m.id)
+        } else {
+            format!("  {}", m.id)
+        };
+        let color = if is_current {
+            color!(0xa9b1d6)
+        } else {
+            color!(0x565f89)
+        };
+        let model_id = m.id.clone();
+        col = col.push(
+            button(text(label).size(13).color(color))
+                .style(|_theme, _status| button::Style {
+                    background: None,
+                    text_color: color!(0xa9b1d6),
+                    ..Default::default()
+                })
+                .on_press(Message::SwitchModel(model_id))
+                .padding([0, 0]),
+        );
+    }
 
     // Tokens
     col = col
