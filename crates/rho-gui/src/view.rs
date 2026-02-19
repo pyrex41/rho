@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 use iced::widget::{
-    button, column, container, markdown, row, scrollable, text, text_input, Column,
+    button, column, container, markdown, progress_bar, row, scrollable, text, text_input, Column,
 };
 use iced::{color, Element, Font, Length, Theme};
 
@@ -84,64 +84,78 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         );
     }
 
-    // Tokens
-    col = col
-        .push(text("TOKENS").size(11).color(color!(0x565f89)))
-        .push(text(format!("In: {}", format_tokens(app.total_input_tokens))).size(13))
-        .push(text(format!("Out: {}", format_tokens(app.total_output_tokens))).size(13));
-
-    // Context
+    // Context usage — always visible
     let context_pct = app.context_usage_percent();
-    if context_pct > 0.0 {
-        let ctx_color = if context_pct > 80.0 {
-            color!(0xf7768e)
-        } else if context_pct > 50.0 {
-            color!(0xe0af68)
-        } else {
-            color!(0xa9b1d6)
-        };
-        col = col
-            .push(text("CONTEXT").size(11).color(color!(0x565f89)))
-            .push(text(format!("~{:.0}% used", context_pct)).size(13).color(ctx_color));
-    }
-
-    // Turns
+    let ctx_color = if context_pct > 80.0 {
+        color!(0xf7768e)
+    } else if context_pct > 50.0 {
+        color!(0xe0af68)
+    } else {
+        color!(0x7aa2f7)
+    };
     let turns = app.conversation_history.iter()
         .filter(|m| matches!(m, rho_core::types::Message::User { .. }))
         .count();
-    if turns > 0 {
-        col = col
-            .push(text("TURNS").size(11).color(color!(0x565f89)))
-            .push(text(format!("{}", turns)).size(13));
-    }
-
-    // Session
+    let ctx_label = format!(
+        "CONTEXT  {:.0}%  ({} turns, {}m {}s)",
+        context_pct, turns, mins, secs
+    );
     col = col
-        .push(text("SESSION").size(11).color(color!(0x565f89)))
-        .push(text(format!("{mins}m {secs:02}s")).size(13));
+        .push(text(ctx_label).size(11).color(ctx_color))
+        .push(
+            progress_bar(0.0..=100.0, context_pct as f32)
+                .style(move |_theme: &Theme| iced::widget::progress_bar::Style {
+                    background: color!(0x1a1b2e).into(),
+                    bar: ctx_color.into(),
+                    border: iced::Border::default(),
+                }),
+        );
 
-    // Sessions
-    col = col.push(text("SESSIONS").size(11).color(color!(0x565f89)));
+    // Tokens
+    col = col
+        .push(text("TOKENS").size(11).color(color!(0x565f89)))
+        .push(
+            row![
+                text(format!("↑ {}", format_tokens(app.total_input_tokens))).size(12),
+                text("  ").size(12),
+                text(format!("↓ {}", format_tokens(app.total_output_tokens))).size(12),
+            ]
+        );
+
+    // New chat button
     let new_btn = button(
-        text("+ New Session")
+        text("⟳ New Chat")
             .size(12)
             .font(FONT_MONO)
             .color(color!(0x7aa2f7)),
     )
     .on_press(Message::NewSession)
     .width(Length::Fill)
-    .padding([2, 4])
+    .padding([4, 6])
     .style(move |_theme: &Theme, status| match status {
         button::Status::Hovered => button::Style {
             background: Some(color!(0x283457).into()),
+            border: iced::Border {
+                color: color!(0x7aa2f7),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
             ..button::Style::default()
         },
         _ => button::Style {
-            background: None,
+            background: Some(color!(0x1a1b2e).into()),
+            border: iced::Border {
+                color: color!(0x3b4261),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
             ..button::Style::default()
         },
     });
     col = col.push(new_btn);
+
+    // Sessions
+    col = col.push(text("SESSIONS").size(11).color(color!(0x565f89)));
 
     for session in app.session_list.iter().take(10) {
         let is_current = app.current_session_id.as_deref() == Some(&session.id);
