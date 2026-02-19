@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use rho_core::tool::{AgentTool, ToolError};
 use rho_core::types::{Content, ToolResult};
-use rho_hashline::{apply_hashline_edits, HashlineEdit, HashlineError};
 use serde_json::Value;
 use similar::{ChangeTag, TextDiff};
 use tokio_util::sync::CancellationToken;
@@ -81,26 +80,34 @@ impl AgentTool for EditTool {
     }
 
     fn description(&self) -> String {
-        "Edit a file using line-addressed hashline operations or text replacement.".to_string()
+        "Replace an exact string in a file. `old_string` must match the file content exactly \
+(including whitespace and indentation). Use `replace_all: true` to replace every occurrence. \
+The file must already exist — use the `write` tool to create new files."
+            .to_string()
     }
 
     fn parameters_schema(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {
+                "file_path": {
                     "type": "string",
-                    "description": "The absolute path to the file to edit"
+                    "description": "Absolute path to the file to edit."
                 },
-                "edits": {
-                    "type": "array",
-                    "description": "Array of edit operations (hashline or replace)",
-                    "items": {
-                        "type": "object"
-                    }
+                "old_string": {
+                    "type": "string",
+                    "description": "The exact text to find (must be unique in the file unless replace_all is true)."
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "The text to replace it with."
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "If true, replace all occurrences. Default false (errors if not unique)."
                 }
             },
-            "required": ["path", "edits"]
+            "required": ["file_path", "old_string", "new_string"]
         })
     }
 
@@ -110,68 +117,74 @@ impl AgentTool for EditTool {
         params: Value,
         _cancel: CancellationToken,
     ) -> Result<ToolResult, ToolError> {
+        // Accept both "file_path" (new) and "path" (legacy) parameter names
         let path_str = params
-            .get("path")
+            .get("file_path")
+            .or_else(|| params.get("path"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                ToolError::InvalidParameters("missing or invalid 'path' parameter".into())
+                ToolError::InvalidParameters("missing or invalid 'file_path' parameter".into())
             })?;
 
         let path = self.resolve_path(path_str);
 
-        let edits_value = params
-            .get("edits")
-            .and_then(|v| v.as_array())
+        let old_string = params
+            .get("old_string")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                ToolError::InvalidParameters("missing or invalid 'edits' parameter".into())
+                ToolError::InvalidParameters("missing or invalid 'old_string' parameter".into())
             })?;
+
+        let new_string = params
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                ToolError::InvalidParameters("missing or invalid 'new_string' parameter".into())
+            })?;
+
+        let replace_all = params
+            .get("replace_all")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // Read original file content
         let original = tokio::fs::read_to_string(&path).await.map_err(|e| {
             ToolError::ExecutionFailed(format!("Failed to read {}: {}", path.display(), e))
         })?;
 
-        // Parse edits
-        let edits: Vec<HashlineEdit> = edits_value
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                serde_json::from_value(v.clone()).map_err(|e| {
-                    ToolError::InvalidParameters(format!("edit[{}]: {}", i, e))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        // Validate match count
+        let match_count = original.matches(old_string).count();
+        if match_count == 0 {
+            return Ok(ToolResult {
+                content: vec![Content::Text {
+                    text: format!(
+                        "old_string not found in {}.\n\
+                        Make sure the text matches exactly (including whitespace/indentation).",
+                        path.display()
+                    ),
+                }],
+                details: serde_json::json!({}),
+            });
+        }
+        if match_count > 1 && !replace_all {
+            return Ok(ToolResult {
+                content: vec![Content::Text {
+                    text: format!(
+                        "old_string matches {} places in {}. \
+                        Add more surrounding context to make it unique, \
+                        or set replace_all: true to replace all occurrences.",
+                        match_count,
+                        path.display()
+                    ),
+                }],
+                details: serde_json::json!({}),
+            });
+        }
 
-        // Apply edits
-        let result = match apply_hashline_edits(&original, &edits) {
-            Ok(new_content) => new_content,
-            Err(HashlineError::Mismatch(m)) => {
-                return Ok(ToolResult {
-                    content: vec![Content::Text {
-                        text: m.message,
-                    }],
-                    details: serde_json::json!({}),
-                });
-            }
-            Err(HashlineError::TextNotFound(text)) => {
-                return Ok(ToolResult {
-                    content: vec![Content::Text {
-                        text: format!("Text not found in file: {}", text),
-                    }],
-                    details: serde_json::json!({}),
-                });
-            }
-            Err(HashlineError::MultipleMatches) => {
-                return Ok(ToolResult {
-                    content: vec![Content::Text {
-                        text: "Multiple matches for text (expected unique match). Use 'all: true' to replace all occurrences.".to_string(),
-                    }],
-                    details: serde_json::json!({}),
-                });
-            }
-            Err(e) => {
-                return Err(ToolError::ExecutionFailed(e.to_string()));
-            }
+        let result = if replace_all {
+            original.replace(old_string, new_string)
+        } else {
+            original.replacen(old_string, new_string, 1)
         };
 
         // Write result back
@@ -194,32 +207,19 @@ impl AgentTool for EditTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rho_hashline::compute_line_hash;
-
-    fn make_content(lines: &[&str]) -> String {
-        lines.join("\n")
-    }
-
-    fn hash_at(content: &str, line: usize) -> String {
-        let lines: Vec<&str> = content.split('\n').collect();
-        compute_line_hash(lines[line - 1]).to_string()
-    }
 
     #[tokio::test]
-    async fn edit_set_line() {
+    async fn edit_basic_replace() {
         let tool = EditTool::new();
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
 
-        let content = make_content(&["alpha", "beta", "gamma"]);
-        std::fs::write(&file_path, &content).unwrap();
+        std::fs::write(&file_path, "alpha\nbeta\ngamma").unwrap();
 
-        let h2 = hash_at(&content, 2);
         let params = serde_json::json!({
-            "path": file_path.to_str().unwrap(),
-            "edits": [
-                { "set_line": { "anchor": format!("2:{}", h2), "new_text": "BETA" } }
-            ]
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "beta",
+            "new_string": "BETA"
         });
 
         let result = tool
@@ -227,9 +227,7 @@ mod tests {
             .await
             .unwrap();
 
-        let written = std::fs::read_to_string(&file_path).unwrap();
-        assert_eq!(written, "alpha\nBETA\ngamma");
-
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "alpha\nBETA\ngamma");
         match &result.content[0] {
             Content::Text { text } => {
                 assert!(text.contains("Edited"));
@@ -240,27 +238,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_replace_lines() {
+    async fn edit_multiline_replace() {
         let tool = EditTool::new();
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
 
-        let content = make_content(&["alpha", "beta", "gamma", "delta"]);
-        std::fs::write(&file_path, &content).unwrap();
+        std::fs::write(&file_path, "alpha\nbeta\ngamma\ndelta").unwrap();
 
-        let h2 = hash_at(&content, 2);
-        let h3 = hash_at(&content, 3);
         let params = serde_json::json!({
-            "path": file_path.to_str().unwrap(),
-            "edits": [
-                {
-                    "replace_lines": {
-                        "start_anchor": format!("2:{}", h2),
-                        "end_anchor": format!("3:{}", h3),
-                        "new_text": "new_line"
-                    }
-                }
-            ]
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "beta\ngamma",
+            "new_string": "new_line"
+        });
+
+        tool.execute("call_1", params, CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "alpha\nnew_line\ndelta");
+    }
+
+    #[tokio::test]
+    async fn edit_replace_all() {
+        let tool = EditTool::new();
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+
+        std::fs::write(&file_path, "foo bar foo baz foo").unwrap();
+
+        let params = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "foo",
+            "new_string": "qux",
+            "replace_all": true
+        });
+
+        tool.execute("call_1", params, CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "qux bar qux baz qux");
+    }
+
+    #[tokio::test]
+    async fn edit_not_unique_without_replace_all() {
+        let tool = EditTool::new();
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+
+        std::fs::write(&file_path, "foo foo").unwrap();
+
+        let params = serde_json::json!({
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "foo",
+            "new_string": "bar"
         });
 
         let result = tool
@@ -268,32 +299,26 @@ mod tests {
             .await
             .unwrap();
 
-        let written = std::fs::read_to_string(&file_path).unwrap();
-        assert_eq!(written, "alpha\nnew_line\ndelta");
-
+        // File unchanged
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "foo foo");
         match &result.content[0] {
-            Content::Text { text } => {
-                assert!(text.contains("Edited"));
-            }
+            Content::Text { text } => assert!(text.contains("matches 2 places")),
             _ => panic!("expected Text content"),
         }
     }
 
     #[tokio::test]
-    async fn edit_insert_after() {
+    async fn edit_old_string_not_found() {
         let tool = EditTool::new();
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
 
-        let content = make_content(&["alpha", "beta", "gamma"]);
-        std::fs::write(&file_path, &content).unwrap();
+        std::fs::write(&file_path, "hello world").unwrap();
 
-        let h2 = hash_at(&content, 2);
         let params = serde_json::json!({
-            "path": file_path.to_str().unwrap(),
-            "edits": [
-                { "insert_after": { "anchor": format!("2:{}", h2), "text": "inserted" } }
-            ]
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "nonexistent",
+            "new_string": "something"
         });
 
         let result = tool
@@ -301,45 +326,8 @@ mod tests {
             .await
             .unwrap();
 
-        let written = std::fs::read_to_string(&file_path).unwrap();
-        assert_eq!(written, "alpha\nbeta\ninserted\ngamma");
-
         match &result.content[0] {
-            Content::Text { text } => {
-                assert!(text.contains("Edited"));
-            }
-            _ => panic!("expected Text content"),
-        }
-    }
-
-    #[tokio::test]
-    async fn edit_replace_mode() {
-        let tool = EditTool::new();
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("test.txt");
-
-        let content = make_content(&["hello world", "foo bar"]);
-        std::fs::write(&file_path, &content).unwrap();
-
-        let params = serde_json::json!({
-            "path": file_path.to_str().unwrap(),
-            "edits": [
-                { "replace": { "old_text": "hello world", "new_text": "goodbye world" } }
-            ]
-        });
-
-        let result = tool
-            .execute("call_1", params, CancellationToken::new())
-            .await
-            .unwrap();
-
-        let written = std::fs::read_to_string(&file_path).unwrap();
-        assert_eq!(written, "goodbye world\nfoo bar");
-
-        match &result.content[0] {
-            Content::Text { text } => {
-                assert!(text.contains("Edited"));
-            }
+            Content::Text { text } => assert!(text.contains("not found")),
             _ => panic!("expected Text content"),
         }
     }
@@ -348,10 +336,9 @@ mod tests {
     async fn edit_file_not_found() {
         let tool = EditTool::new();
         let params = serde_json::json!({
-            "path": "/tmp/nonexistent_rho_test_file_12345.txt",
-            "edits": [
-                { "replace": { "old_text": "a", "new_text": "b" } }
-            ]
+            "file_path": "/tmp/nonexistent_rho_test_file_12345.txt",
+            "old_string": "a",
+            "new_string": "b"
         });
 
         let err = tool
@@ -360,47 +347,31 @@ mod tests {
             .unwrap_err();
 
         match err {
-            ToolError::ExecutionFailed(msg) => {
-                assert!(msg.contains("Failed to read"));
-            }
+            ToolError::ExecutionFailed(msg) => assert!(msg.contains("Failed to read")),
             _ => panic!("expected ExecutionFailed"),
         }
     }
 
     #[tokio::test]
-    async fn edit_mismatch_returns_helpful_message() {
+    async fn edit_legacy_path_param() {
+        // "path" should still work as an alias for "file_path"
         let tool = EditTool::new();
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
 
-        let content = make_content(&["alpha", "beta", "gamma"]);
-        std::fs::write(&file_path, &content).unwrap();
+        std::fs::write(&file_path, "hello world").unwrap();
 
         let params = serde_json::json!({
             "path": file_path.to_str().unwrap(),
-            "edits": [
-                { "set_line": { "anchor": "2:ff", "new_text": "new" } }
-            ]
+            "old_string": "hello",
+            "new_string": "goodbye"
         });
 
-        let result = tool
-            .execute("call_1", params, CancellationToken::new())
+        tool.execute("call_1", params, CancellationToken::new())
             .await
             .unwrap();
 
-        // Mismatch should be returned as a successful tool result (not an error),
-        // so the agent can see the correct hashes and retry
-        match &result.content[0] {
-            Content::Text { text } => {
-                assert!(text.contains(">>>"));
-                assert!(text.contains("changed since last read"));
-            }
-            _ => panic!("expected Text content"),
-        }
-
-        // File should NOT have been modified
-        let after = std::fs::read_to_string(&file_path).unwrap();
-        assert_eq!(after, content);
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "goodbye world");
     }
 
     #[tokio::test]
@@ -414,7 +385,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_text_not_found() {
+    async fn edit_text_not_found_legacy() {
         let tool = EditTool::new();
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
@@ -422,10 +393,9 @@ mod tests {
         std::fs::write(&file_path, "hello world").unwrap();
 
         let params = serde_json::json!({
-            "path": file_path.to_str().unwrap(),
-            "edits": [
-                { "replace": { "old_text": "nonexistent", "new_text": "something" } }
-            ]
+            "file_path": file_path.to_str().unwrap(),
+            "old_string": "nonexistent",
+            "new_string": "something"
         });
 
         let result = tool
@@ -434,9 +404,7 @@ mod tests {
             .unwrap();
 
         match &result.content[0] {
-            Content::Text { text } => {
-                assert!(text.contains("Text not found"));
-            }
+            Content::Text { text } => assert!(text.contains("not found")),
             _ => panic!("expected Text content"),
         }
     }

@@ -24,58 +24,77 @@ use crate::autocomplete::{self, AutocompleteState, AutocompleteTrigger};
 
 pub const INPUT_ID: &str = "rho-input";
 
-const BASE_SYSTEM_PROMPT: &str = "\
+fn build_system_prompt_with_tools(tools: &[(Arc<dyn AgentTool>, bool)]) -> String {
+    let now = chrono::Local::now();
+    let current_date = now.format("%Y-%m-%d %H:%M %Z").to_string();
+    let current_month_year = now.format("%B %Y").to_string();
+    let current_year = now.format("%Y").to_string();
+
+    let tool_docs: String = tools
+        .iter()
+        .filter(|(_, enabled)| *enabled)
+        .map(|(t, _)| format_tool_doc(t.as_ref()))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    format!(
+        "\
 You are a coding assistant with tools for reading, editing, searching files and running commands.
 
 The current date is {current_date}. The current month is {current_month_year}. \
 You MUST use this year when searching for recent information, documentation, or current events.
 
-Available tools:
-{tool_list}
+# Tools
 
-When editing files, first read them to get LINE:HASH references, then use edit with those anchors. \
-For new files, use write. For small changes, use edit. For running tests or builds, use bash.
+{tool_docs}
 
-Web search guidance:
-- IMPORTANT: Always include the year {current_year} in search queries for recent information. \
-For example, if asked about 'latest trending repos', search for 'trending github repos {current_year}', NOT without a year.
-- Use multiple searches with different queries to get comprehensive results. A single search is rarely enough.
-- Fetch primary sources directly (e.g. github.com/trending, trendshift.io, official docs) rather than relying only on blog posts.
-- After searching, use web_fetch on the most promising URLs to get detailed information.
-- Always cite your sources with URLs in your response.";
+# Guidelines
 
-/// Short descriptions for each tool, used in the dynamic system prompt.
-fn tool_description(name: &str) -> &'static str {
-    match name {
-        "read" => "Read a file (returns LINE:HASH|content format) or list a directory",
-        "write" => "Create or overwrite a file",
-        "edit" => "Edit a file using LINE:HASH anchors from read output, or text replacement",
-        "bash" => "Execute shell commands",
-        "grep" => "Search file contents with regex (returns matches with LINE:HASH|content format)",
-        "find" => "Find files by glob pattern (respects .gitignore)",
-        "task" => "Launch a subagent to handle a task in a separate context",
-        "web_fetch" => "Fetch a URL and return its content as clean markdown/text",
-        "web_search" => "Search the web via DuckDuckGo and return results (title, URL, snippet)",
-        _ => "Tool",
-    }
+- To edit a file: read it first, then call edit with the exact text to replace.
+- To create a new file: use write.
+- For builds, tests, git: use bash.
+- Web search: always include the year {current_year} in queries for recent info. \
+Use multiple searches, then fetch primary sources with web_fetch.",
+        current_date = current_date,
+        current_month_year = current_month_year,
+        current_year = current_year,
+        tool_docs = tool_docs,
+    )
 }
 
-fn build_system_prompt_with_tools(tools: &[(Arc<dyn AgentTool>, bool)]) -> String {
-    let tool_list: String = tools
-        .iter()
-        .filter(|(_, enabled)| *enabled)
-        .map(|(t, _)| format!("- {}: {}", t.name(), tool_description(t.name())))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let now = chrono::Local::now();
-    let current_date = now.format("%Y-%m-%d %H:%M %Z").to_string();
-    let current_month_year = now.format("%B %Y").to_string();
-    let current_year = now.format("%Y").to_string();
-    BASE_SYSTEM_PROMPT
-        .replace("{tool_list}", &tool_list)
-        .replace("{current_date}", &current_date)
-        .replace("{current_month_year}", &current_month_year)
-        .replace("{current_year}", &current_year)
+/// Format a single tool's documentation block from its name, description, and schema.
+fn format_tool_doc(tool: &dyn AgentTool) -> String {
+    let schema = tool.parameters_schema();
+    let props = schema.get("properties").and_then(|p| p.as_object());
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    let mut params = String::new();
+    if let Some(props) = props {
+        for (name, prop) in props {
+            let ty = prop.get("type").and_then(|v| v.as_str()).unwrap_or("any");
+            let desc = prop
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let req = if required.contains(&name.as_str()) {
+                "required"
+            } else {
+                "optional"
+            };
+            params.push_str(&format!("  - {name} ({ty}, {req}): {desc}\n"));
+        }
+    }
+
+    format!(
+        "## {name}\n{desc}\nParameters:\n{params}",
+        name = tool.name(),
+        desc = tool.description(),
+        params = params.trim_end(),
+    )
 }
 
 /// A block in the conversation view.
