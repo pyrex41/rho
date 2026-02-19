@@ -174,6 +174,17 @@ pub struct RhoApp {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub session_start: Instant,
+    // Settings panel
+    pub settings_open: bool,
+    pub settings_tab: SettingsTab,
+    pub project_config_content: iced::widget::text_editor::Content,
+    pub models_config_content: iced::widget::text_editor::Content,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingsTab {
+    Project,
+    Models,
 }
 
 /// Iced messages.
@@ -195,6 +206,14 @@ pub enum Message {
     NewSession,
     DeleteSession(String),
     SwitchModel(String),
+    // Settings
+    OpenSettings,
+    CloseSettings,
+    SettingsTabChanged(SettingsTab),
+    ProjectConfigAction(iced::widget::text_editor::Action),
+    ModelsConfigAction(iced::widget::text_editor::Action),
+    SaveProjectConfig,
+    SaveModelsConfig,
     Noop,
 }
 
@@ -315,6 +334,10 @@ impl RhoApp {
             total_input_tokens: 0,
             total_output_tokens: 0,
             session_start: Instant::now(),
+            settings_open: false,
+            settings_tab: SettingsTab::Project,
+            project_config_content: iced::widget::text_editor::Content::new(),
+            models_config_content: iced::widget::text_editor::Content::new(),
         };
 
         (app, IcedTask::none())
@@ -544,6 +567,87 @@ impl RhoApp {
                     }
                 } else {
                     self.error = Some(format!("Unknown model: '{}'", model_id));
+                }
+                IcedTask::none()
+            }
+            Message::OpenSettings => {
+                let project_text = self
+                    .project_config
+                    .source
+                    .as_ref()
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .unwrap_or_else(|| {
+                        "---\n# model: claude-sonnet\n# thinking: off\n# memories: true\n---\n\n\
+                        # Project Instructions\n\nAdd your project-specific instructions here.\n"
+                            .to_string()
+                    });
+                let models_text = dirs::home_dir()
+                    .map(|h| h.join(".rho").join("models.toml"))
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .unwrap_or_else(|| {
+                        "# Add custom models here.\n# Example:\n\
+                        # [[model]]\n# id = \"gpt-4o\"\n# provider = \"openai\"\n\
+                        # model_id = \"gpt-4o\"\n# api_key_env = \"OPENAI_API_KEY\"\n\
+                        # context_window = 128000\n# max_tokens = 16384\n"
+                            .to_string()
+                    });
+                self.project_config_content =
+                    iced::widget::text_editor::Content::with_text(&project_text);
+                self.models_config_content =
+                    iced::widget::text_editor::Content::with_text(&models_text);
+                self.settings_open = true;
+                IcedTask::none()
+            }
+            Message::CloseSettings => {
+                self.settings_open = false;
+                IcedTask::none()
+            }
+            Message::SettingsTabChanged(tab) => {
+                self.settings_tab = tab;
+                IcedTask::none()
+            }
+            Message::ProjectConfigAction(action) => {
+                self.project_config_content.perform(action);
+                IcedTask::none()
+            }
+            Message::ModelsConfigAction(action) => {
+                self.models_config_content.perform(action);
+                IcedTask::none()
+            }
+            Message::SaveProjectConfig => {
+                let text = self.project_config_content.text();
+                let path = self
+                    .project_config
+                    .source
+                    .clone()
+                    .unwrap_or_else(|| self.cwd.join("RHO.md"));
+                match std::fs::write(&path, &text) {
+                    Ok(()) => {
+                        self.project_config =
+                            rho_core::config::load_project_config(&self.cwd);
+                        self.error = None;
+                    }
+                    Err(e) => {
+                        self.error = Some(format!("Failed to save {}: {}", path.display(), e));
+                    }
+                }
+                IcedTask::none()
+            }
+            Message::SaveModelsConfig => {
+                let text = self.models_config_content.text();
+                if let Some(home) = dirs::home_dir() {
+                    let dir = home.join(".rho");
+                    let _ = std::fs::create_dir_all(&dir);
+                    let path = dir.join("models.toml");
+                    match std::fs::write(&path, &text) {
+                        Ok(()) => {
+                            self.model_registry = ModelRegistry::load();
+                            self.error = None;
+                        }
+                        Err(e) => {
+                            self.error = Some(format!("Failed to save models.toml: {}", e));
+                        }
+                    }
                 }
                 IcedTask::none()
             }

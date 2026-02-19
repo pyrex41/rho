@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 use iced::widget::{
-    button, column, container, markdown, progress_bar, row, scrollable, text, text_input, Column,
+    button, column, container, markdown, progress_bar, row, scrollable, text, text_editor,
+    text_input, Column,
 };
 use iced::{color, Element, Font, Length, Theme};
 
@@ -28,9 +29,12 @@ pub const FONT_MONO_BOLD: Font = Font {
 
 pub fn view(app: &RhoApp) -> Element<'_, Message> {
     let sidebar = render_sidebar(app);
-    let chat = render_chat(app);
-
-    row![sidebar, chat].into()
+    let main = if app.settings_open {
+        render_settings(app)
+    } else {
+        render_chat(app)
+    };
+    row![sidebar, main].into()
 }
 
 pub fn theme(_app: &RhoApp) -> Theme {
@@ -52,9 +56,28 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
 
     let mut col = Column::new().spacing(16).padding(16).width(220);
 
-    // Project
+    // Project + config button
+    let cfg_label = if app.settings_open { "✕ Close" } else { "⚙ Config" };
+    let cfg_btn = button(text(cfg_label).size(12).color(color!(0x7aa2f7)))
+        .on_press(if app.settings_open {
+            Message::CloseSettings
+        } else {
+            Message::OpenSettings
+        })
+        .padding([2, 6])
+        .style(|_theme: &Theme, _status| button::Style {
+            background: None,
+            ..button::Style::default()
+        });
     col = col
-        .push(text("PROJECT").size(11).color(color!(0x565f89)))
+        .push(
+            row![
+                text("PROJECT").size(11).color(color!(0x565f89)),
+                iced::widget::Space::new().width(Length::Fill),
+                cfg_btn,
+            ]
+            .align_y(iced::Alignment::Center),
+        )
         .push(text(dir_name).size(14));
 
     // Model picker
@@ -355,7 +378,9 @@ fn render_chat<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         blocks_col = blocks_col.push(render_streaming_markdown(app));
     }
 
-    let chat_area = scrollable(blocks_col).height(Length::Fill);
+    let chat_area = scrollable(blocks_col)
+        .height(Length::Fill)
+        .anchor_bottom();
 
     // Autocomplete popup
     let autocomplete_popup: Element<'_, Message> = if app.autocomplete.active {
@@ -694,5 +719,131 @@ fn render_tool_summary(counts: &[(String, usize)]) -> Element<'_, Message> {
     )
     .padding([4, 12])
     .width(Length::Fill)
+    .into()
+}
+
+// --- Settings panel ---
+
+fn render_settings(app: &RhoApp) -> Element<'_, Message> {
+    use crate::app::SettingsTab;
+
+    let tab_btn = |label: String, tab: SettingsTab, active: bool| {
+        let color = if active { color!(0x7aa2f7) } else { color!(0x565f89) };
+        button(text(label).size(13).color(color))
+            .on_press(Message::SettingsTabChanged(tab))
+            .padding([4, 12])
+            .style(move |_theme: &Theme, _status| button::Style {
+                background: if active {
+                    Some(color!(0x1a1b2e).into())
+                } else {
+                    None
+                },
+                border: if active {
+                    iced::Border {
+                        color: color!(0x7aa2f7),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    }
+                } else {
+                    iced::Border::default()
+                },
+                ..button::Style::default()
+            })
+    };
+
+    let tabs = row![
+        tab_btn(
+            "Project (RHO.md)".into(),
+            SettingsTab::Project,
+            app.settings_tab == SettingsTab::Project
+        ),
+        tab_btn(
+            "Models (~/.rho/models.toml)".into(),
+            SettingsTab::Models,
+            app.settings_tab == SettingsTab::Models
+        ),
+    ]
+    .spacing(8);
+
+    let (editor_elem, file_label, save_msg): (Element<'_, Message>, String, Message) = match app.settings_tab {
+        SettingsTab::Project => {
+            let path_label = app
+                .project_config
+                .source
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| format!("{}/RHO.md (will be created)", app.cwd.display()));
+            let ed = text_editor(&app.project_config_content)
+                .on_action(Message::ProjectConfigAction)
+                .font(FONT_MONO)
+                .height(Length::Fill)
+                .style(|_theme: &Theme, _status| text_editor::Style {
+                    background: color!(0x0d0e17).into(),
+                    border: iced::Border {
+                        color: color!(0x3b4261),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    placeholder: color!(0x565f89),
+                    value: color!(0xa9b1d6),
+                    selection: color!(0x283457),
+                });
+            (ed.into(), path_label, Message::SaveProjectConfig)
+        }
+        SettingsTab::Models => {
+            let path_label = dirs::home_dir()
+                .map(|h| h.join(".rho").join("models.toml").display().to_string())
+                .unwrap_or_else(|| "~/.rho/models.toml".to_string());
+            let ed = text_editor(&app.models_config_content)
+                .on_action(Message::ModelsConfigAction)
+                .font(FONT_MONO)
+                .height(Length::Fill)
+                .style(|_theme: &Theme, _status| text_editor::Style {
+                    background: color!(0x0d0e17).into(),
+                    border: iced::Border {
+                        color: color!(0x3b4261),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    placeholder: color!(0x565f89),
+                    value: color!(0xa9b1d6),
+                    selection: color!(0x283457),
+                });
+            (ed.into(), path_label, Message::SaveModelsConfig)
+        }
+    };
+
+    let save_btn = button(text("Save").size(13).color(color!(0x9ece6a)))
+        .on_press(save_msg)
+        .padding([6, 16])
+        .style(|_theme: &Theme, status| button::Style {
+            background: Some(match status {
+                button::Status::Hovered => color!(0x1a2e1a).into(),
+                _ => color!(0x0d1a0d).into(),
+            }),
+            border: iced::Border {
+                color: color!(0x9ece6a),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..button::Style::default()
+        });
+
+    let toolbar = row![
+        text(file_label).size(11).color(color!(0x565f89)),
+        iced::widget::Space::new().width(Length::Fill),
+        save_btn,
+    ]
+    .align_y(iced::Alignment::Center);
+
+    container(
+        column![tabs, toolbar, editor_elem]
+            .spacing(12)
+            .padding(20)
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
     .into()
 }
