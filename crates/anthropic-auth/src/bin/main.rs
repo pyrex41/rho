@@ -1,4 +1,4 @@
-use anthropic_auth::{get_token, is_oauth_token, oauth, AuthError};
+use rho_auth::{get_token, is_oauth_token, oauth, AuthError};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
