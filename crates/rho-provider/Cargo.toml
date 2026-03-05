@@ -8,7 +8,7 @@ repository = "https://github.com/pyrex41/rho"
 
 [dependencies]
 rho-core = { version = "0.1.0", path = "../rho-core" }
-anthropic-auth = { version = "0.1.0", path = "../anthropic-auth" }
+anthropic-auth = { version = "0.1.0", path = "../anthropic-auth", package = "rho-auth" }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

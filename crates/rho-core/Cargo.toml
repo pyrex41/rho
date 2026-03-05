@@ -16,7 +16,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 dirs = "5"
 toml = { workspace = true }
-anthropic-auth = { version = "0.1.0", path = "../anthropic-auth" }
+anthropic-auth = { version = "0.1.0", path = "../anthropic-auth", package = "rho-auth" }
 
 [dev-dependencies]
 tempfile = "3"

@@ -142,22 +142,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anthropic-auth"
-version = "0.1.0"
-dependencies = [
- "base64",
- "clap",
- "dirs",
- "open",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3509,6 +3493,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rho-auth"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "clap",
+ "dirs",
+ "open",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "rho-cli"
 version = "0.1.0"
 dependencies = [
@@ -3519,10 +3519,10 @@ dependencies = [
 name = "rho-core"
 version = "0.1.0"
 dependencies = [
- "anthropic-auth",
  "async-trait",
  "dirs",
  "futures",
+ "rho-auth",
  "serde",
  "serde_json",
  "tempfile",
@@ -3536,11 +3536,11 @@ dependencies = [
 name = "rho-gui"
 version = "0.1.0"
 dependencies = [
- "anthropic-auth",
  "chrono",
  "dirs",
  "futures",
  "iced",
+ "rho-auth",
  "rho-core",
  "rho-provider",
  "rho-session",
@@ -3570,11 +3570,11 @@ version = "0.1.0"
 name = "rho-provider"
 version = "0.1.0"
 dependencies = [
- "anthropic-auth",
  "anyhow",
  "bytes",
  "futures",
  "reqwest",
+ "rho-auth",
  "rho-core",
  "serde",
  "serde_json",

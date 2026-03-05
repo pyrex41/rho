@@ -12,7 +12,7 @@ path = "src/main.rs"
 rho-core = { path = "../rho-core" }
 rho-provider = { path = "../rho-provider" }
 rho-tools = { path = "../rho-tools" }
-anthropic-auth = { path = "../anthropic-auth" }
+anthropic-auth = { version = "0.1.0", path = "../anthropic-auth", package = "rho-auth" }
 rho-session = { path = "../rho-session" }
 iced = { version = "0.14", features = ["markdown", "highlighter", "tokio"] }
 tokio = { workspace = true }
