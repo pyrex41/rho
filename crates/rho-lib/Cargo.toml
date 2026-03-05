@@ -2,3 +2,6 @@
 name = "rho-lib"
 version = "0.1.0"
 edition = "2021"
+description = "Shared utilities for rho"
+license = "MIT"
+repository = "https://github.com/pyrex41/rho"

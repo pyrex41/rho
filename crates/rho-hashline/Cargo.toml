@@ -2,6 +2,9 @@
 name = "rho-hashline"
 version = "0.1.0"
 edition = "2021"
+description = "Line-level hashing for file editing anchors"
+license = "MIT"
+repository = "https://github.com/pyrex41/rho"
 
 [dependencies]
 xxhash-rust = { version = "0.8", features = ["xxh32"] }

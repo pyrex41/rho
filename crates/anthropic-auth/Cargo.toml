@@ -2,6 +2,9 @@
 name = "anthropic-auth"
 version = "0.1.0"
 edition = "2021"
+description = "Anthropic API authentication (OAuth PKCE + API key)"
+license = "MIT"
+repository = "https://github.com/pyrex41/rho"
 
 [[bin]]
 name = "anthropic-auth"

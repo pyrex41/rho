@@ -2,6 +2,9 @@
 name = "rho-core"
 version = "0.1.0"
 edition = "2021"
+description = "Core types and agent loop for the rho AI coding agent"
+license = "MIT"
+repository = "https://github.com/pyrex41/rho"
 
 [dependencies]
 serde = { workspace = true }
@@ -13,7 +16,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 dirs = "5"
 toml = { workspace = true }
-anthropic-auth = { path = "../anthropic-auth" }
+anthropic-auth = { version = "0.1.0", path = "../anthropic-auth" }
 
 [dev-dependencies]
 tempfile = "3"

@@ -16,15 +16,18 @@ resolver = "2"
 name = "rho"
 version = "0.1.0"
 edition = "2021"
+description = "AI coding agent with file tools"
+license = "MIT"
+repository = "https://github.com/pyrex41/rho"
 
 [[bin]]
 name = "rho-cli"
 path = "src/main.rs"
 
 [dependencies]
-rho-core = { path = "crates/rho-core" }
-rho-provider = { path = "crates/rho-provider" }
-rho-tools = { path = "crates/rho-tools" }
+rho-core = { version = "0.1.0", path = "crates/rho-core" }
+rho-provider = { version = "0.1.0", path = "crates/rho-provider" }
+rho-tools = { version = "0.1.0", path = "crates/rho-tools" }
 tokio = { workspace = true }
 clap = { workspace = true }
 futures = { workspace = true }
