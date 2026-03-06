@@ -3484,6 +3484,7 @@ dependencies = [
  "futures",
  "rho-core",
  "rho-provider",
+ "rho-session",
  "rho-tools",
  "serde_json",
  "tokio",
@@ -3509,7 +3510,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rho-cli"
+name = "rho-cli-stub"
 version = "0.1.0"
 dependencies = [
  "clap",

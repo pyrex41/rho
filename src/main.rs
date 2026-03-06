@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -10,9 +10,11 @@ use tokio_util::sync::CancellationToken;
 use rho_core::agent_loop::{agent_loop, AgentLoopConfig};
 use rho_core::compaction;
 use rho_core::config::load_project_config;
+use rho_core::event_handler::{handle_event, EventHandlerConfig, SessionPersistence};
 use rho_core::models::{ModelConfig, ModelRegistry, ProviderType};
 use rho_core::tool::AgentTool;
 use rho_core::types::*;
+use rho_session::SessionStore;
 
 mod loop_runner;
 
@@ -48,6 +50,10 @@ struct Cli {
     /// Read prompt from file
     #[arg(long)]
     prompt_file: Option<PathBuf>,
+
+    /// Resume an existing session ID (prints/updates events in that session)
+    #[arg(long, alias = "session-id")]
+    resume: Option<String>,
 
     /// Restrict available tools (comma-separated names)
     #[arg(long, value_delimiter = ',')]
@@ -204,10 +210,7 @@ fn build_system_prompt(
     config: &rho_core::config::ProjectConfig,
     system_append: Option<&str>,
 ) -> String {
-    let base = config
-        .system_prompt
-        .as_deref()
-        .unwrap_or(SYSTEM_PROMPT);
+    let base = config.system_prompt.as_deref().unwrap_or(SYSTEM_PROMPT);
 
     let mut prompt = base.to_string();
 
@@ -224,7 +227,11 @@ fn build_system_prompt(
         );
     }
     // Replace year placeholder in web search guidance
-    prompt = prompt.replace("the current year", &format!("the current year ({})", year_str))
+    prompt = prompt
+        .replace(
+            "the current year",
+            &format!("the current year ({})", year_str),
+        )
         .replace("with the year", &format!("with the year {}", year_str));
 
     // Add skills
@@ -250,10 +257,7 @@ fn build_system_prompt(
     if !commands.is_empty() {
         prompt.push_str("\n\n<available_commands>\n");
         for cmd in &commands {
-            prompt.push_str(&format!(
-                "  /{} — {}\n",
-                cmd.name, cmd.description
-            ));
+            prompt.push_str(&format!("  /{} — {}\n", cmd.name, cmd.description));
         }
         prompt.push_str("</available_commands>");
     }
@@ -271,6 +275,131 @@ fn build_system_prompt(
     }
 
     prompt
+}
+
+fn session_db_path(cwd: &PathBuf) -> PathBuf {
+    if let Ok(path) = std::env::var("RHO_SESSION_DB") {
+        return PathBuf::from(path);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".rho").join("sessions.db");
+    }
+    cwd.join(".rho").join("sessions.db")
+}
+
+fn read_prompt_line() -> Result<Option<String>> {
+    print!("rho> ");
+    io::stdout().flush().ok();
+    let mut input = String::new();
+    let bytes = io::stdin()
+        .read_line(&mut input)
+        .context("Failed reading interactive prompt")?;
+    if bytes == 0 {
+        return Ok(None);
+    }
+    Ok(Some(input.trim().to_string()))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_agent_turn(
+    messages: Vec<Message>,
+    model: Model,
+    api_key: String,
+    system_prompt: String,
+    tools: Vec<Arc<dyn AgentTool>>,
+    thinking: ThinkingLevel,
+    model_config: &ModelConfig,
+    compact_threshold: Option<f64>,
+    show_thinking: bool,
+    cancel: CancellationToken,
+    session_handler: &mut Option<EventHandlerConfig>,
+    last_reported_session_id: &mut Option<String>,
+) -> Vec<Message> {
+    let transform_messages = compact_threshold.map(compaction::make_compaction_transform);
+    let config = AgentLoopConfig {
+        model,
+        api_key,
+        system_prompt,
+        tools,
+        thinking,
+        max_tokens: None,
+        stream_fn: rho_provider::stream_fn_for_model(model_config),
+        get_steering_messages: None,
+        get_follow_up_messages: None,
+        transform_messages,
+    };
+
+    let mut consumer = agent_loop(messages.clone(), config, cancel);
+    let mut stdout = std::io::stdout();
+    let mut final_messages = messages;
+
+    while let Some(event) = consumer.next().await {
+        if let Some(handler) = session_handler.as_mut() {
+            if let Some(update) = handle_event(&event, handler) {
+                if let Some(session_id) = update.session_id {
+                    if last_reported_session_id.as_deref() != Some(session_id.as_str()) {
+                        eprintln!("[session:{}]", session_id);
+                        *last_reported_session_id = Some(session_id);
+                    }
+                }
+            }
+        }
+
+        match event {
+            AgentEvent::MessageUpdate { event, .. } => match event {
+                AssistantStreamEvent::TextDelta { delta, .. } => {
+                    print!("{}", delta);
+                    stdout.flush().ok();
+                }
+                AssistantStreamEvent::ThinkingDelta { delta, .. } => {
+                    if show_thinking {
+                        eprint!("{}", delta);
+                        std::io::stderr().flush().ok();
+                    }
+                }
+                _ => {}
+            },
+            AgentEvent::ToolExecutionStart {
+                tool_name, args, ..
+            } => {
+                let args_summary = match serde_json::to_string(&args) {
+                    Ok(s) if s.len() > 200 => format!("{}...", &s[..200]),
+                    Ok(s) => s,
+                    Err(_) => String::new(),
+                };
+                eprintln!("\n[tool:{}] {}", tool_name, args_summary);
+            }
+            AgentEvent::ToolExecutionEnd {
+                tool_name,
+                is_error,
+                result,
+                ..
+            } => {
+                if is_error {
+                    eprintln!("[tool:{}] ERROR: {:?}", tool_name, result.content);
+                } else {
+                    eprintln!("[tool:{}] done", tool_name);
+                }
+            }
+            AgentEvent::ContextCompacted {
+                original_estimate,
+                compacted_estimate,
+                ..
+            } => {
+                eprintln!(
+                    "[compact] {} -> {} tokens (estimated)",
+                    original_estimate, compacted_estimate
+                );
+            }
+            AgentEvent::AgentEnd { messages } => {
+                final_messages = messages;
+                println!();
+            }
+            _ => {}
+        }
+    }
+
+    final_messages
 }
 
 #[tokio::main]
@@ -320,18 +449,25 @@ async fn main() -> Result<()> {
 
             let api_key = match api_key {
                 Some(key) => key,
-                None => ModelRegistry::resolve_api_key(&model_config)
-                    .map_err(|e| anyhow::anyhow!(e))?,
+                None => {
+                    ModelRegistry::resolve_api_key(&model_config).map_err(|e| anyhow::anyhow!(e))?
+                }
             };
 
             let model = ModelRegistry::to_model(&model_config);
 
             // Plan mode defaults to read-only tools
-            let default_tools = if loop_runner::LoopMode::from_str(&mode) == loop_runner::LoopMode::Plan {
-                Some(vec!["read".into(), "grep".into(), "find".into(), "write".into()])
-            } else {
-                project_config.allowed_tools.clone()
-            };
+            let default_tools =
+                if loop_runner::LoopMode::from_str(&mode) == loop_runner::LoopMode::Plan {
+                    Some(vec![
+                        "read".into(),
+                        "grep".into(),
+                        "find".into(),
+                        "write".into(),
+                    ])
+                } else {
+                    project_config.allowed_tools.clone()
+                };
             let tools = build_tools(&cwd, &default_tools);
             let system_prompt = build_system_prompt(&cwd, &project_config, None);
 
@@ -370,14 +506,16 @@ async fn main() -> Result<()> {
 
             let project_config = load_project_config(&cwd);
 
-            // Resolve prompt: --prompt-file takes precedence, then positional, then error
-            let prompt = if let Some(ref prompt_file) = cli.prompt_file {
-                std::fs::read_to_string(prompt_file)
-                    .with_context(|| format!("Failed to read prompt file: {}", prompt_file.display()))?
+            // Resolve optional prompt: --prompt-file takes precedence, then positional.
+            // If no prompt is provided with --resume, we'll enter interactive mode.
+            let prompt_from_cli = if let Some(ref prompt_file) = cli.prompt_file {
+                Some(std::fs::read_to_string(prompt_file).with_context(|| {
+                    format!("Failed to read prompt file: {}", prompt_file.display())
+                })?)
             } else if let Some(ref p) = cli.prompt {
-                p.clone()
+                Some(p.clone())
             } else {
-                anyhow::bail!("No prompt provided. Use a positional argument or --prompt-file.");
+                None
             };
 
             let model_id = project_config
@@ -394,8 +532,9 @@ async fn main() -> Result<()> {
 
             let api_key = match &cli.api_key {
                 Some(key) => key.clone(),
-                None => ModelRegistry::resolve_api_key(&model_config)
-                    .map_err(|e| anyhow::anyhow!(e))?,
+                None => {
+                    ModelRegistry::resolve_api_key(&model_config).map_err(|e| anyhow::anyhow!(e))?
+                }
             };
 
             let model = ModelRegistry::to_model(&model_config);
@@ -407,6 +546,67 @@ async fn main() -> Result<()> {
             let system_prompt =
                 build_system_prompt(&cwd, &project_config, cli.system_append.as_deref());
 
+            let running_under_scud = std::env::var("SCUD_TASK_ID").is_ok();
+            let store_path = session_db_path(&cwd);
+            let session_store = match SessionStore::open(&store_path) {
+                Ok(store) => Some(Arc::new(store)),
+                Err(e) => {
+                    if cli.resume.is_some() || running_under_scud {
+                        anyhow::bail!(
+                            "Failed to open session store at {}: {}",
+                            store_path.display(),
+                            e
+                        );
+                    }
+                    eprintln!(
+                        "[warn] session persistence disabled ({}: {})",
+                        store_path.display(),
+                        e
+                    );
+                    None
+                }
+            };
+
+            let mut session_id = cli.resume.clone();
+            let mut history: Vec<Message> = Vec::new();
+
+            if let Some(store) = session_store.as_ref() {
+                if let Some(ref existing_id) = session_id {
+                    if !store
+                        .session_exists(existing_id)
+                        .with_context(|| "Failed to verify existing session ID")?
+                    {
+                        anyhow::bail!(
+                            "Session '{}' not found in {}",
+                            existing_id,
+                            store_path.display()
+                        );
+                    }
+                    history = store
+                        .load_messages(existing_id)
+                        .with_context(|| format!("Failed to load session '{}'", existing_id))?;
+                } else {
+                    let session = store
+                        .create_session(&model_id, &cwd)
+                        .with_context(|| "Failed to create session")?;
+                    session_id = Some(session.id);
+                }
+            } else if cli.resume.is_some() {
+                anyhow::bail!("--resume requires a writable session store");
+            }
+
+            let mut event_handler_cfg = session_store.clone().map(|store| EventHandlerConfig {
+                session_store: Some(store as Arc<dyn SessionPersistence>),
+                session_id: session_id.clone(),
+                model_id: model_id.clone(),
+                cwd: cwd.clone(),
+            });
+            let mut last_reported_session_id = None;
+            if let Some(ref id) = session_id {
+                eprintln!("[session:{}]", id);
+                last_reported_session_id = Some(id.clone());
+            }
+
             let cancel = CancellationToken::new();
             let cancel_clone = cancel.clone();
             tokio::spawn(async move {
@@ -415,86 +615,73 @@ async fn main() -> Result<()> {
                 cancel_clone.cancel();
             });
 
-            let prompts = vec![Message::User {
-                content: UserContent::Text(prompt),
-                timestamp: now_ms(),
-            }];
-
-            // Build compaction transform if configured
-            let transform_messages = project_config.compact_threshold.map(|threshold| {
-                compaction::make_compaction_transform(threshold)
-            });
-
-            let config = AgentLoopConfig {
-                model,
-                api_key,
-                system_prompt,
-                tools,
-                thinking,
-                max_tokens: None,
-                stream_fn: rho_provider::stream_fn_for_model(&model_config),
-                get_steering_messages: None,
-                get_follow_up_messages: None,
-                transform_messages,
-            };
-
-            let mut consumer = agent_loop(prompts, config, cancel);
-
-            let mut stdout = std::io::stdout();
-            let show_thinking = cli.show_thinking;
-
-            while let Some(event) = consumer.next().await {
-                match event {
-                    AgentEvent::MessageUpdate { event, .. } => match event {
-                        AssistantStreamEvent::TextDelta { delta, .. } => {
-                            print!("{}", delta);
-                            stdout.flush().ok();
-                        }
-                        AssistantStreamEvent::ThinkingDelta { delta, .. } => {
-                            if show_thinking {
-                                eprint!("{}", delta);
-                                std::io::stderr().flush().ok();
-                            }
-                        }
-                        _ => {}
-                    },
-                    AgentEvent::ToolExecutionStart {
-                        tool_name, args, ..
-                    } => {
-                        let args_summary = match serde_json::to_string(&args) {
-                            Ok(s) if s.len() > 200 => format!("{}...", &s[..200]),
-                            Ok(s) => s,
-                            Err(_) => String::new(),
-                        };
-                        eprintln!("\n[tool:{}] {}", tool_name, args_summary);
+            if prompt_from_cli.is_none() && cli.resume.is_some() {
+                let resumed = session_id.as_deref().unwrap_or("unknown");
+                println!("Resumed session {}. Type /exit to quit.", resumed);
+                let mut conversation = history;
+                loop {
+                    if cancel.is_cancelled() {
+                        break;
                     }
-                    AgentEvent::ToolExecutionEnd {
-                        tool_name,
-                        is_error,
-                        result,
-                        ..
-                    } => {
-                        if is_error {
-                            eprintln!("[tool:{}] ERROR: {:?}", tool_name, result.content);
-                        } else {
-                            eprintln!("[tool:{}] done", tool_name);
-                        }
+                    let Some(input) = read_prompt_line()? else {
+                        break;
+                    };
+                    if input.is_empty() {
+                        continue;
                     }
-                    AgentEvent::ContextCompacted {
-                        original_estimate,
-                        compacted_estimate,
-                        ..
-                    } => {
-                        eprintln!(
-                            "[compact] {} -> {} tokens (estimated)",
-                            original_estimate, compacted_estimate
+                    if input == "/exit" || input == "/quit" {
+                        break;
+                    }
+                    let mut turn_messages = conversation.clone();
+                    turn_messages.push(Message::User {
+                        content: UserContent::Text(input),
+                        timestamp: now_ms(),
+                    });
+                    conversation = run_agent_turn(
+                        turn_messages,
+                        model.clone(),
+                        api_key.clone(),
+                        system_prompt.clone(),
+                        tools.clone(),
+                        thinking.clone(),
+                        &model_config,
+                        project_config.compact_threshold,
+                        cli.show_thinking,
+                        cancel.clone(),
+                        &mut event_handler_cfg,
+                        &mut last_reported_session_id,
+                    )
+                    .await;
+                }
+            } else {
+                let prompt = match prompt_from_cli {
+                    Some(p) => p,
+                    None => {
+                        anyhow::bail!(
+                            "No prompt provided. Use a positional argument, --prompt-file, or --resume."
                         );
                     }
-                    AgentEvent::AgentEnd { .. } => {
-                        println!();
-                    }
-                    _ => {}
-                }
+                };
+                let mut messages = history;
+                messages.push(Message::User {
+                    content: UserContent::Text(prompt),
+                    timestamp: now_ms(),
+                });
+                let _ = run_agent_turn(
+                    messages,
+                    model,
+                    api_key,
+                    system_prompt,
+                    tools,
+                    thinking.clone(),
+                    &model_config,
+                    project_config.compact_threshold,
+                    cli.show_thinking,
+                    cancel,
+                    &mut event_handler_cfg,
+                    &mut last_reported_session_id,
+                )
+                .await;
             }
         }
     }

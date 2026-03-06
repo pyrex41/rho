@@ -60,11 +60,7 @@ impl SessionStore {
         })
     }
 
-    pub fn create_session(
-        &self,
-        model: &str,
-        cwd: &Path,
-    ) -> Result<Session, rusqlite::Error> {
+    pub fn create_session(&self, model: &str, cwd: &Path) -> Result<Session, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -120,8 +116,7 @@ impl SessionStore {
                 Message::Assistant { .. } => "assistant",
                 Message::ToolResult { .. } => "toolResult",
             };
-            let content_json =
-                serde_json::to_string(msg).unwrap_or_default();
+            let content_json = serde_json::to_string(msg).unwrap_or_default();
             let timestamp = match msg {
                 Message::User { timestamp, .. } => *timestamp,
                 Message::Assistant { timestamp, .. } => *timestamp,
@@ -139,14 +134,10 @@ impl SessionStore {
         Ok(())
     }
 
-    pub fn load_messages(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<Message>, rusqlite::Error> {
+    pub fn load_messages(&self, session_id: &str) -> Result<Vec<Message>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT content_json FROM messages WHERE session_id = ?1 ORDER BY seq",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT content_json FROM messages WHERE session_id = ?1 ORDER BY seq")?;
         let messages = stmt
             .query_map(params![session_id], |row| {
                 let json: String = row.get(0)?;
@@ -158,10 +149,14 @@ impl SessionStore {
         Ok(messages)
     }
 
-    pub fn list_sessions(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<SessionSummary>, rusqlite::Error> {
+    pub fn session_exists(&self, session_id: &str) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT COUNT(1) FROM sessions WHERE id = ?1")?;
+        let count: i64 = stmt.query_row(params![session_id], |row| row.get(0))?;
+        Ok(count > 0)
+    }
+
+    pub fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT s.id, s.title, s.model, s.updated_at,
@@ -188,10 +183,7 @@ impl SessionStore {
     pub fn delete_session(&self, id: &str) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        tx.execute(
-            "DELETE FROM messages WHERE session_id = ?1",
-            params![id],
-        )?;
+        tx.execute("DELETE FROM messages WHERE session_id = ?1", params![id])?;
         tx.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
         tx.commit()?;
         Ok(())
@@ -321,6 +313,21 @@ mod tests {
     }
 
     #[test]
+    fn session_exists_returns_true_for_known_session() {
+        let store = test_store();
+        let session = store
+            .create_session("claude-sonnet", Path::new("/tmp"))
+            .unwrap();
+        assert!(store.session_exists(&session.id).unwrap());
+    }
+
+    #[test]
+    fn session_exists_returns_false_for_unknown_session() {
+        let store = test_store();
+        assert!(!store.session_exists("does-not-exist").unwrap());
+    }
+
+    #[test]
     fn save_messages_replaces() {
         let store = test_store();
         let session = store
@@ -396,9 +403,7 @@ mod tests {
                 timestamp: 1000,
             },
             Message::Assistant {
-                content: vec![Content::Text {
-                    text: "hi".into(),
-                }],
+                content: vec![Content::Text { text: "hi".into() }],
                 model: "claude-sonnet".into(),
                 usage: Usage::default(),
                 stop_reason: StopReason::Stop,

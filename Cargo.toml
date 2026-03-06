@@ -28,6 +28,7 @@ path = "src/main.rs"
 rho-core = { version = "0.1.0", path = "crates/rho-core" }
 rho-provider = { version = "0.1.0", path = "crates/rho-provider" }
 rho-tools = { version = "0.1.0", path = "crates/rho-tools" }
+rho-session = { version = "0.1.0", path = "crates/rho-session" }
 tokio = { workspace = true }
 clap = { workspace = true }
 futures = { workspace = true }

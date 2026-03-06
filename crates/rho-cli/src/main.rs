@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "rho-cli", about = "AI coding agent with file tools", long_about = None)]
+#[command(name = "rho-cli-stub", about = "Legacy rho CLI stub", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -72,5 +72,8 @@ enum Commands {
 
 fn main() {
     let _cli = Cli::parse();
-    println!("rho-cli placeholder - CLI structure ready");
+    eprintln!(
+        "rho-cli-stub is a legacy placeholder. Use the top-level `rho-cli` binary from the \
+rho-agent package."
+    );
 }
