@@ -16,7 +16,19 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 dirs = "5"
 toml = { workspace = true }
-anthropic-auth = { version = "0.1.0", path = "../anthropic-auth", package = "rho-auth" }
+# Absorbed from rho-hashline
+xxhash-rust = { version = "0.8", features = ["xxh32"] }
+thiserror = { workspace = true }
+regex = { workspace = true }
+# Absorbed from rho-session
+rusqlite = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+# Absorbed from anthropic-auth
+reqwest = { workspace = true }
+sha2 = "0.10"
+base64 = "0.22"
+open = "5"
 
 [dev-dependencies]
 tempfile = "3"

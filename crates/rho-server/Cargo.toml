@@ -10,7 +10,6 @@ repository = "https://github.com/pyrex41/rho"
 rho-core = { version = "0.1.0", path = "../rho-core" }
 rho-tools = { version = "0.1.0", path = "../rho-tools" }
 rho-provider = { version = "0.1.0", path = "../rho-provider" }
-rho-session = { version = "0.1.0", path = "../rho-session" }
 
 axum = { version = "0.8", features = ["json"] }
 tokio = { workspace = true }

@@ -5,7 +5,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use uuid::Uuid;
 
-use rho_core::types::Message;
+use crate::types::Message;
 
 pub struct SessionStore {
     conn: Mutex<Connection>,
@@ -272,7 +272,7 @@ impl SessionStore {
     }
 }
 
-impl rho_core::event_handler::SessionPersistence for SessionStore {
+impl crate::event_handler::SessionPersistence for SessionStore {
     fn create_session(
         &self,
         model: &str,
@@ -306,7 +306,7 @@ impl rho_core::event_handler::SessionPersistence for SessionStore {
 pub fn extract_title(messages: &[Message]) -> String {
     for msg in messages {
         if let Message::User {
-            content: rho_core::types::UserContent::Text(text),
+            content: crate::types::UserContent::Text(text),
             ..
         } = msg
         {
@@ -328,7 +328,7 @@ pub fn extract_title(messages: &[Message]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rho_core::types::*;
+    use crate::types::*;
 
     fn test_store() -> SessionStore {
         SessionStore::open(Path::new(":memory:")).unwrap()

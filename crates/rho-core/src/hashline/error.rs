@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::hash::compute_line_hash;
+use super::hash::compute_line_hash;
 
 /// Number of context lines shown above/below each mismatched line.
 const MISMATCH_CONTEXT: usize = 2;

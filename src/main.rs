@@ -14,7 +14,7 @@ use rho_core::event_handler::{handle_event, EventHandlerConfig, SessionPersisten
 use rho_core::models::{ModelConfig, ModelRegistry, ProviderType};
 use rho_core::tool::AgentTool;
 use rho_core::types::*;
-use rho_session::SessionStore;
+use rho_core::session::SessionStore;
 
 mod loop_runner;
 

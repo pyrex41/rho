@@ -1,4 +1,4 @@
-use crate::hash::compute_line_hash;
+use super::hash::compute_line_hash;
 
 /// Format content with hashline prefixes.
 ///

@@ -1,4 +1,4 @@
-use crate::error::HashlineError;
+use super::error::HashlineError;
 
 /// A parsed line reference with 1-indexed line number and 2-char hex hash.
 #[derive(Debug, Clone, PartialEq, Eq)]

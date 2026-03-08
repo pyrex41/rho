@@ -452,7 +452,7 @@ fn run_grep(params: &GrepParams) -> Result<ToolResult, ToolError> {
 
         for line in &group.lines {
             let padded = format!("{:>width$}", line.line_number, width = line_width);
-            let hash = rho_hashline::compute_line_hash(&line.content);
+            let hash = rho_core::hashline::compute_line_hash(&line.content);
             if line.is_match {
                 output.push_str(&format!(">>{}:{}|{}\n", padded, hash, line.content));
             } else {

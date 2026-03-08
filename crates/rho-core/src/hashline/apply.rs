@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::edit::HashlineEdit;
-use crate::error::{HashlineError, HashlineMismatchError, MismatchedLine};
-use crate::hash::compute_line_hash;
-use crate::heuristics;
-use crate::parse::{parse_anchor, LineRef};
+use super::edit::HashlineEdit;
+use super::error::{HashlineError, HashlineMismatchError, MismatchedLine};
+use super::hash::compute_line_hash;
+use super::heuristics;
+use super::parse::{parse_anchor, LineRef};
 
 /// Parsed references for an edit operation.
 enum ParsedRefs {
@@ -418,7 +418,7 @@ pub fn apply_hashline_edits(
 /// Apply a fuzzy text replace operation.
 fn apply_replace_edit(
     content: &str,
-    replace: &crate::edit::ReplaceOp,
+    replace: &super::edit::ReplaceOp,
 ) -> Result<String, HashlineError> {
     let old_text = &replace.old_text;
     let new_text = &replace.new_text;
@@ -570,8 +570,8 @@ fn build_mismatch(line_ref: &LineRef, line: usize, file_lines: &[&str]) -> Misma
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::edit::*;
-    use crate::hash::compute_line_hash;
+    use crate::hashline::edit::*;
+    use crate::hashline::hash::compute_line_hash;
 
     fn make_content(lines: &[&str]) -> String {
         lines.join("\n")

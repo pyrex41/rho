@@ -171,7 +171,7 @@ impl AgentTool for ReadTool {
             if !output.is_empty() {
                 output.push('\n');
             }
-            let hash = rho_hashline::compute_line_hash(line);
+            let hash = rho_core::hashline::compute_line_hash(line);
             output.push_str(&format!("{:>width$}:{}|{}", line_num, hash, line, width = pad_width));
         }
 

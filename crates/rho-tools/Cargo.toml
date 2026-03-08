@@ -8,7 +8,6 @@ repository = "https://github.com/pyrex41/rho"
 
 [dependencies]
 rho-core = { version = "0.1.0", path = "../rho-core" }
-rho-hashline = { version = "0.1.0", path = "../rho-hashline" }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
