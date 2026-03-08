@@ -24,7 +24,7 @@ impl Default for ProjectConfig {
             system_prompt_append: None,
             allowed_tools: None,
             validation_commands: Vec::new(),
-            compact_threshold: None,
+            compact_threshold: Some(0.8),
             memories: true,
             source: None,
         }
@@ -40,6 +40,14 @@ pub fn load_project_config(cwd: &Path) -> ProjectConfig {
     if rho_md.is_file() {
         if let Ok(content) = std::fs::read_to_string(&rho_md) {
             return parse_rho_md(&content, rho_md);
+        }
+    }
+
+    // Try AGENTS.md (ecosystem standard: Codex, Cursor, Copilot, Amp, etc.)
+    let agents_md = cwd.join("AGENTS.md");
+    if agents_md.is_file() {
+        if let Ok(content) = std::fs::read_to_string(&agents_md) {
+            return parse_rho_md(&content, agents_md);
         }
     }
 
@@ -247,5 +255,40 @@ This is a Rust workspace. Always run `cargo test` after changes.
         assert!(config.model.is_none());
         assert!(config.system_prompt_append.is_none());
         assert!(config.source.is_none());
+        // Default compaction should be enabled
+        assert_eq!(config.compact_threshold, Some(0.8));
+    }
+
+    #[test]
+    fn load_agents_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agents_md = tmp.path().join("AGENTS.md");
+        std::fs::write(
+            &agents_md,
+            "---\nmodel: claude-sonnet\n---\n\n# Agent Instructions\nBe helpful.",
+        )
+        .unwrap();
+
+        let config = load_project_config(tmp.path());
+        assert_eq!(config.source.as_deref(), Some(agents_md.as_path()));
+        assert_eq!(config.model.as_deref(), Some("claude-sonnet"));
+        assert!(config
+            .system_prompt_append
+            .unwrap()
+            .contains("Be helpful"));
+    }
+
+    #[test]
+    fn agents_md_takes_precedence_over_claude_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("AGENTS.md"),
+            "---\nmodel: from-agents\n---\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("CLAUDE.md"), "# From CLAUDE.md").unwrap();
+
+        let config = load_project_config(tmp.path());
+        assert_eq!(config.model.as_deref(), Some("from-agents"));
     }
 }

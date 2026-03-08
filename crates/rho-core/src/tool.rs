@@ -33,5 +33,14 @@ pub trait AgentTool: Send + Sync {
     fn description(&self) -> String;
     fn parameters_schema(&self) -> Value;
 
+    /// One-liner description (~10 words) for compact system prompt listing.
+    /// Defaults to first sentence of full description.
+    fn brief_description(&self) -> String {
+        let desc = self.description();
+        desc.split_once(". ")
+            .map(|(first, _)| first.to_string())
+            .unwrap_or(desc)
+    }
+
     async fn execute(&self, tool_call_id: &str, params: Value, cancel: CancellationToken) -> Result<ToolResult, ToolError>;
 }

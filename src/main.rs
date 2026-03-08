@@ -59,6 +59,10 @@ struct Cli {
     #[arg(long, value_delimiter = ',')]
     tools: Option<Vec<String>>,
 
+    /// Load all tools (including grep, find, web_fetch, web_search)
+    #[arg(long)]
+    all_tools: bool,
+
     /// Append to system prompt
     #[arg(long)]
     system_append: Option<String>,
@@ -100,6 +104,41 @@ enum Commands {
         #[arg(short = 'C', long)]
         directory: Option<PathBuf>,
     },
+
+    /// Start HTTP server mode (agent as a service)
+    Serve {
+        /// Port to listen on
+        #[arg(long, default_value_t = 7890)]
+        port: u16,
+
+        /// Bind address
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+
+        /// Disable bearer token authentication
+        #[arg(long)]
+        no_auth: bool,
+
+        /// Model ID override
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Thinking level override
+        #[arg(long)]
+        thinking: Option<String>,
+
+        /// Override API key
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// Working directory
+        #[arg(short = 'C', long)]
+        directory: Option<PathBuf>,
+
+        /// Load all tools (including grep, find, web_fetch, web_search)
+        #[arg(long)]
+        all_tools: bool,
+    },
 }
 
 fn now_ms() -> u64 {
@@ -120,32 +159,17 @@ fn parse_thinking(s: &str) -> ThinkingLevel {
 }
 
 const SYSTEM_PROMPT: &str = "\
-You are a coding assistant with tools for reading, editing, searching files and running commands.
-
-Available tools:
-- read: Read a file (returns LINE:HASH|content format) or list a directory
-- write: Create or overwrite a file
-- edit: Edit a file using LINE:HASH anchors from read output, or text replacement
-- bash: Execute shell commands
-- grep: Search file contents with regex (returns matches with LINE:HASH|content format)
-- find: Find files by glob pattern (respects .gitignore)
-- task: Launch a subagent to handle a task in a separate context
-- web_fetch: Fetch a URL and return its content as clean markdown/text
-- web_search: Search the web via DuckDuckGo and return results (title, URL, snippet)
+You are a coding assistant with tools for reading, editing, and running commands.
 
 When editing files, first read them to get LINE:HASH references, then use edit with those anchors. \
-For new files, use write. For small changes, use edit. For running tests or builds, use bash.
+For new files, use write. For small changes, use edit. For running tests, builds, file search (rg, fd), \
+web requests (curl), or any CLI operation, use bash.";
 
-Web search guidance:
-- IMPORTANT: You MUST include the current year in search queries for recent information. \
-For example, if asked about 'latest trending repos', search for 'trending github repos' with the year, NOT without a year.
-- Use multiple searches with different queries to get comprehensive results. A single search is rarely enough.
-- Fetch primary sources directly (e.g. github.com/trending, trendshift.io, official docs) rather than relying only on blog posts.
-- After searching, use web_fetch on the most promising URLs to get detailed information.
-- Always cite your sources with URLs in your response.";
+/// Default 5 core tools — the model can use bash for grep/find/web operations.
+const DEFAULT_TOOLS: &[&str] = &["read", "write", "edit", "bash", "task"];
 
-fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>) -> Vec<Arc<dyn AgentTool>> {
-    let all_tools: Vec<Arc<dyn AgentTool>> = vec![
+fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>, all_tools_flag: bool) -> Vec<Arc<dyn AgentTool>> {
+    let every_tool: Vec<Arc<dyn AgentTool>> = vec![
         Arc::new(rho_tools::read::ReadTool::with_cwd(cwd.clone())),
         Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone())),
         Arc::new(rho_tools::edit::EditTool::with_cwd(cwd.clone())),
@@ -158,12 +182,20 @@ fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>) -> Vec<Arc<dyn Agen
     ];
 
     if let Some(ref allowed) = allowed {
-        all_tools
+        // Explicit tool list from --tools or config
+        every_tool
             .into_iter()
             .filter(|t| allowed.iter().any(|a| a == t.name()))
             .collect()
+    } else if all_tools_flag {
+        // --all-tools: load everything
+        every_tool
     } else {
-        all_tools
+        // Default: 5 core tools
+        every_tool
+            .into_iter()
+            .filter(|t| DEFAULT_TOOLS.contains(&t.name()))
+            .collect()
     }
 }
 
@@ -209,10 +241,19 @@ fn build_system_prompt(
     cwd: &PathBuf,
     config: &rho_core::config::ProjectConfig,
     system_append: Option<&str>,
+    tools: &[Arc<dyn AgentTool>],
 ) -> String {
     let base = config.system_prompt.as_deref().unwrap_or(SYSTEM_PROMPT);
 
     let mut prompt = base.to_string();
+
+    // Add brief tool descriptions
+    if !tools.is_empty() {
+        prompt.push_str("\n\nAvailable tools:\n");
+        for tool in tools {
+            prompt.push_str(&format!("- {}: {}\n", tool.name(), tool.brief_description()));
+        }
+    }
 
     // Inject current date/time and year
     let now = chrono::Local::now();
@@ -468,8 +509,8 @@ async fn main() -> Result<()> {
                 } else {
                     project_config.allowed_tools.clone()
                 };
-            let tools = build_tools(&cwd, &default_tools);
-            let system_prompt = build_system_prompt(&cwd, &project_config, None);
+            let tools = build_tools(&cwd, &default_tools, true);
+            let system_prompt = build_system_prompt(&cwd, &project_config, None, &tools);
 
             let cancel = CancellationToken::new();
             let cancel_clone = cancel.clone();
@@ -495,6 +536,86 @@ async fn main() -> Result<()> {
             };
 
             loop_runner::run_loop(loop_config, cancel).await?;
+        }
+        Some(Commands::Serve {
+            port,
+            bind,
+            no_auth,
+            model,
+            thinking,
+            api_key,
+            directory,
+            all_tools,
+        }) => {
+            let cwd = match directory {
+                Some(dir) => std::fs::canonicalize(&dir)
+                    .with_context(|| format!("Invalid directory: {}", dir.display()))?,
+                None => std::env::current_dir().context("Failed to get current directory")?,
+            };
+
+            let project_config = load_project_config(&cwd);
+            let model_id = model
+                .or(project_config.model.clone())
+                .unwrap_or_else(|| "claude-sonnet".into());
+            let thinking_str = thinking.unwrap_or_else(|| {
+                project_config
+                    .thinking
+                    .map(|t| format!("{:?}", t).to_lowercase())
+                    .unwrap_or_else(|| "off".into())
+            });
+            let thinking_level = parse_thinking(&thinking_str);
+            let registry = ModelRegistry::load();
+            let model_config = resolve_model_config(&model_id, &registry, thinking_level);
+
+            let api_key = match api_key {
+                Some(key) => key,
+                None => {
+                    ModelRegistry::resolve_api_key(&model_config).map_err(|e| anyhow::anyhow!(e))?
+                }
+            };
+
+            let tools = build_tools(&cwd, &project_config.allowed_tools, all_tools);
+            let system_prompt = build_system_prompt(&cwd, &project_config, None, &tools);
+
+            // Generate auth token
+            let auth_token = if no_auth {
+                None
+            } else {
+                Some(format!("rho_sk_{}", uuid::Uuid::new_v4().to_string().replace("-", "")))
+            };
+
+            let mut builder = rho_server::ServerBuilder::new(
+                project_config,
+                registry,
+                model_config,
+                api_key,
+                cwd,
+                tools,
+                system_prompt,
+            );
+            if let Some(ref token) = auth_token {
+                builder = builder.with_auth_token(token.clone());
+            }
+            let app = builder.build();
+
+            let addr = format!("{}:{}", bind, port);
+            let listener = tokio::net::TcpListener::bind(&addr)
+                .await
+                .with_context(|| format!("Failed to bind to {}", addr))?;
+
+            eprintln!("[server] listening on http://{}", addr);
+            if let Some(ref token) = auth_token {
+                eprintln!("[server] auth token: {}", token);
+            } else {
+                eprintln!("[server] authentication disabled (--no-auth)");
+            }
+            if bind == "0.0.0.0" {
+                eprintln!("[server] WARNING: binding to all interfaces — ensure TLS via reverse proxy or SSH tunnel");
+            }
+
+            axum::serve(listener, app)
+                .await
+                .context("Server error")?;
         }
         None => {
             // Single-shot mode
@@ -541,10 +662,10 @@ async fn main() -> Result<()> {
 
             // Merge tool restrictions: CLI flag overrides config
             let allowed_tools = cli.tools.or(project_config.allowed_tools.clone());
-            let tools = build_tools(&cwd, &allowed_tools);
+            let tools = build_tools(&cwd, &allowed_tools, cli.all_tools);
 
             let system_prompt =
-                build_system_prompt(&cwd, &project_config, cli.system_append.as_deref());
+                build_system_prompt(&cwd, &project_config, cli.system_append.as_deref(), &tools);
 
             let running_under_scud = std::env::var("SCUD_TASK_ID").is_ok();
             let store_path = session_db_path(&cwd);
