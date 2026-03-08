@@ -918,6 +918,7 @@ impl RhoApp {
             thinking,
             max_tokens: None,
             stream_fn: rho_provider::stream_fn_for_model(&self.model_config),
+            planning: false,
             get_steering_messages: None,
             get_follow_up_messages: None,
             transform_messages,
