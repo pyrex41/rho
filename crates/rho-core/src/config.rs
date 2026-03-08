@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::hooks::HookConfig;
 use crate::types::ThinkingLevel;
 
 #[derive(Debug, Clone)]
@@ -13,6 +14,7 @@ pub struct ProjectConfig {
     pub compact_threshold: Option<f64>,
     pub memories: bool,
     pub source: Option<PathBuf>,
+    pub post_tools_hooks: Vec<HookConfig>,
 }
 
 impl Default for ProjectConfig {
@@ -27,6 +29,7 @@ impl Default for ProjectConfig {
             compact_threshold: None,
             memories: true,
             source: None,
+            post_tools_hooks: Vec::new(),
         }
     }
 }
@@ -103,14 +106,64 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
     }
 
     // Parse simple YAML frontmatter (key: value lines)
-    let mut in_list: Option<&str> = None;
+    let mut in_list: Option<String> = None;
     let mut list_items: Vec<String> = Vec::new();
+    // State for parsing post_tools_hooks (nested YAML objects in a list)
+    let mut in_hooks = false;
+    let mut current_hook: Option<HookConfig> = None;
+    let mut hooks: Vec<HookConfig> = Vec::new();
 
     for line in frontmatter.lines() {
         let trimmed_line = line.trim();
 
+        // Handle post_tools_hooks parsing
+        if in_hooks {
+            if trimmed_line.starts_with("- ") {
+                // New hook entry — finalize previous one
+                if let Some(hook) = current_hook.take() {
+                    hooks.push(hook);
+                }
+                // Parse "- name: value" or just "- name:"
+                let rest = trimmed_line.strip_prefix("- ").unwrap().trim();
+                let mut hook = HookConfig {
+                    name: String::new(),
+                    command: String::new(),
+                    timeout: 30,
+                    inject_on_failure: true,
+                    trigger_tools: None,
+                };
+                if let Some((k, v)) = rest.split_once(':') {
+                    let k = k.trim();
+                    let v = v.trim();
+                    apply_hook_field(&mut hook, k, v);
+                }
+                current_hook = Some(hook);
+                continue;
+            } else if trimmed_line.is_empty() {
+                continue;
+            } else if line.starts_with("    ") || line.starts_with("\t\t") || line.starts_with("  ") {
+                // Indented line within a hook block
+                if let Some(ref mut hook) = current_hook {
+                    if let Some((k, v)) = trimmed_line.split_once(':') {
+                        let k = k.trim();
+                        let v = v.trim();
+                        apply_hook_field(hook, k, v);
+                    }
+                }
+                continue;
+            } else {
+                // End of hooks section — non-indented, non-list line
+                if let Some(hook) = current_hook.take() {
+                    hooks.push(hook);
+                }
+                config.post_tools_hooks = hooks.drain(..).collect();
+                in_hooks = false;
+                // Fall through to normal parsing for this line
+            }
+        }
+
         // Check if this is a list item for current key
-        if let Some(key) = in_list {
+        if let Some(ref key) = in_list {
             if let Some(item) = trimmed_line.strip_prefix("- ") {
                 list_items.push(item.trim().to_string());
                 continue;
@@ -127,8 +180,12 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
             let value = value.trim();
 
             if value.is_empty() {
+                if key == "post_tools_hooks" {
+                    in_hooks = true;
+                    continue;
+                }
                 // Could be start of a list
-                in_list = Some(key);
+                in_list = Some(key.to_string());
                 continue;
             }
 
@@ -155,11 +212,43 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
     }
 
     // Flush any trailing list
-    if let Some(key) = in_list {
+    if let Some(ref key) = in_list {
         apply_list_field(&mut config, key, &list_items);
     }
 
+    // Flush any trailing hooks
+    if in_hooks {
+        if let Some(hook) = current_hook.take() {
+            hooks.push(hook);
+        }
+        config.post_tools_hooks = hooks;
+    }
+
     config
+}
+
+fn apply_hook_field(hook: &mut HookConfig, key: &str, value: &str) {
+    match key {
+        "name" => hook.name = value.to_string(),
+        "command" => hook.command = value.to_string(),
+        "timeout" => {
+            if let Ok(t) = value.parse::<u64>() {
+                hook.timeout = t;
+            }
+        }
+        "inject_on_failure" => {
+            hook.inject_on_failure = value != "false";
+        }
+        "trigger_tools" => {
+            // Parse "[write, edit, bash]" or "write, edit, bash"
+            let cleaned = value.trim_start_matches('[').trim_end_matches(']');
+            let tools: Vec<String> = cleaned.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            if !tools.is_empty() {
+                hook.trigger_tools = Some(tools);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn apply_list_field(config: &mut ProjectConfig, key: &str, items: &[String]) {

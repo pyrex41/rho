@@ -18,6 +18,21 @@ use rho_session::SessionStore;
 
 mod loop_runner;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum OutputFormat {
+    Text,
+    StreamJson,
+}
+
+impl OutputFormat {
+    fn parse(s: &str) -> Self {
+        match s {
+            "stream-json" | "json" => OutputFormat::StreamJson,
+            _ => OutputFormat::Text,
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "rho", about = "AI coding agent with file tools")]
 struct Cli {
@@ -62,6 +77,10 @@ struct Cli {
     /// Append to system prompt
     #[arg(long)]
     system_append: Option<String>,
+
+    /// Output format: text or stream-json
+    #[arg(long, default_value = "text")]
+    output_format: String,
 }
 
 #[derive(Subcommand)]
@@ -314,6 +333,8 @@ async fn run_agent_turn(
     cancel: CancellationToken,
     session_handler: &mut Option<EventHandlerConfig>,
     last_reported_session_id: &mut Option<String>,
+    output_format: OutputFormat,
+    post_tools_hooks: Vec<Arc<dyn rho_core::hooks::PostToolsHook>>,
 ) -> Vec<Message> {
     let transform_messages = compact_threshold.map(compaction::make_compaction_transform);
     let config = AgentLoopConfig {
@@ -327,6 +348,7 @@ async fn run_agent_turn(
         get_steering_messages: None,
         get_follow_up_messages: None,
         transform_messages,
+        post_tools_hooks,
     };
 
     let mut consumer = agent_loop(messages.clone(), config, cancel);
@@ -338,64 +360,159 @@ async fn run_agent_turn(
             if let Some(update) = handle_event(&event, handler) {
                 if let Some(session_id) = update.session_id {
                     if last_reported_session_id.as_deref() != Some(session_id.as_str()) {
-                        eprintln!("[session:{}]", session_id);
+                        match output_format {
+                            OutputFormat::Text => {
+                                eprintln!("[session:{}]", session_id);
+                            }
+                            OutputFormat::StreamJson => {
+                                println!("{}", serde_json::json!({
+                                    "type": "session",
+                                    "session_id": session_id
+                                }));
+                            }
+                        }
                         *last_reported_session_id = Some(session_id);
                     }
                 }
             }
         }
 
-        match event {
-            AgentEvent::MessageUpdate { event, .. } => match event {
-                AssistantStreamEvent::TextDelta { delta, .. } => {
-                    print!("{}", delta);
-                    stdout.flush().ok();
-                }
-                AssistantStreamEvent::ThinkingDelta { delta, .. } => {
-                    if show_thinking {
-                        eprint!("{}", delta);
-                        std::io::stderr().flush().ok();
+        match output_format {
+            OutputFormat::Text => match event {
+                AgentEvent::MessageUpdate { event, .. } => match event {
+                    AssistantStreamEvent::TextDelta { delta, .. } => {
+                        print!("{}", delta);
+                        stdout.flush().ok();
                     }
+                    AssistantStreamEvent::ThinkingDelta { delta, .. } => {
+                        if show_thinking {
+                            eprint!("{}", delta);
+                            std::io::stderr().flush().ok();
+                        }
+                    }
+                    _ => {}
+                },
+                AgentEvent::ToolExecutionStart {
+                    tool_name, args, ..
+                } => {
+                    let args_summary = match serde_json::to_string(&args) {
+                        Ok(s) if s.len() > 200 => format!("{}...", &s[..200]),
+                        Ok(s) => s,
+                        Err(_) => String::new(),
+                    };
+                    eprintln!("\n[tool:{}] {}", tool_name, args_summary);
+                }
+                AgentEvent::ToolExecutionEnd {
+                    tool_name,
+                    is_error,
+                    result,
+                    ..
+                } => {
+                    if is_error {
+                        eprintln!("[tool:{}] ERROR: {:?}", tool_name, result.content);
+                    } else {
+                        eprintln!("[tool:{}] done", tool_name);
+                    }
+                }
+                AgentEvent::ContextCompacted {
+                    original_estimate,
+                    compacted_estimate,
+                    ..
+                } => {
+                    eprintln!(
+                        "[compact] {} -> {} tokens (estimated)",
+                        original_estimate, compacted_estimate
+                    );
+                }
+                AgentEvent::PostToolsHookStart { hook_name } => {
+                    eprintln!("[hook:{}] running...", hook_name);
+                }
+                AgentEvent::PostToolsHookEnd {
+                    hook_name,
+                    success,
+                    summary,
+                } => {
+                    if success {
+                        eprintln!("[hook:{}] {}", hook_name, summary);
+                    } else {
+                        eprintln!("[hook:{}] FAILED: {}", hook_name, summary);
+                    }
+                }
+                AgentEvent::AgentEnd { messages } => {
+                    final_messages = messages;
+                    println!();
                 }
                 _ => {}
             },
-            AgentEvent::ToolExecutionStart {
-                tool_name, args, ..
-            } => {
-                let args_summary = match serde_json::to_string(&args) {
-                    Ok(s) if s.len() > 200 => format!("{}...", &s[..200]),
-                    Ok(s) => s,
-                    Err(_) => String::new(),
-                };
-                eprintln!("\n[tool:{}] {}", tool_name, args_summary);
-            }
-            AgentEvent::ToolExecutionEnd {
-                tool_name,
-                is_error,
-                result,
-                ..
-            } => {
-                if is_error {
-                    eprintln!("[tool:{}] ERROR: {:?}", tool_name, result.content);
-                } else {
-                    eprintln!("[tool:{}] done", tool_name);
+            OutputFormat::StreamJson => match event {
+                AgentEvent::MessageUpdate { event, .. } => match event {
+                    AssistantStreamEvent::TextDelta { delta, .. } => {
+                        println!("{}", serde_json::json!({
+                            "type": "text_delta",
+                            "text": delta
+                        }));
+                    }
+                    _ => {}
+                },
+                AgentEvent::ToolExecutionStart {
+                    tool_call_id,
+                    tool_name,
+                    args,
+                } => {
+                    let input_summary = match serde_json::to_string(&args) {
+                        Ok(s) if s.len() > 200 => format!("{}...", &s[..200]),
+                        Ok(s) => s,
+                        Err(_) => String::new(),
+                    };
+                    println!("{}", serde_json::json!({
+                        "type": "tool_start",
+                        "tool_name": tool_name,
+                        "tool_id": tool_call_id,
+                        "input_summary": input_summary
+                    }));
                 }
-            }
-            AgentEvent::ContextCompacted {
-                original_estimate,
-                compacted_estimate,
-                ..
-            } => {
-                eprintln!(
-                    "[compact] {} -> {} tokens (estimated)",
-                    original_estimate, compacted_estimate
-                );
-            }
-            AgentEvent::AgentEnd { messages } => {
-                final_messages = messages;
-                println!();
-            }
-            _ => {}
+                AgentEvent::ToolExecutionEnd {
+                    tool_call_id,
+                    tool_name,
+                    is_error,
+                    ..
+                } => {
+                    println!("{}", serde_json::json!({
+                        "type": "tool_result",
+                        "tool_name": tool_name,
+                        "tool_id": tool_call_id,
+                        "success": !is_error
+                    }));
+                }
+                AgentEvent::PostToolsHookStart { hook_name } => {
+                    println!("{}", serde_json::json!({
+                        "type": "hook_start",
+                        "hook_name": hook_name
+                    }));
+                }
+                AgentEvent::PostToolsHookEnd {
+                    hook_name,
+                    success,
+                    summary,
+                } => {
+                    println!("{}", serde_json::json!({
+                        "type": "hook_result",
+                        "hook_name": hook_name,
+                        "success": success,
+                        "summary": summary
+                    }));
+                }
+                AgentEvent::AgentEnd { messages } => {
+                    let sid = last_reported_session_id.clone().unwrap_or_default();
+                    println!("{}", serde_json::json!({
+                        "type": "complete",
+                        "success": true,
+                        "session_id": sid
+                    }));
+                    final_messages = messages;
+                }
+                _ => {}
+            },
         }
     }
 
@@ -479,6 +596,17 @@ async fn main() -> Result<()> {
                 cancel_clone.cancel();
             });
 
+            let post_tools_hooks: Vec<Arc<dyn rho_core::hooks::PostToolsHook>> = project_config
+                .post_tools_hooks
+                .iter()
+                .map(|h| -> Arc<dyn rho_core::hooks::PostToolsHook> {
+                    Arc::new(rho_core::hooks::ShellCommandHook {
+                        config: h.clone(),
+                        cwd: cwd.clone(),
+                    })
+                })
+                .collect();
+
             let loop_config = loop_runner::LoopConfig {
                 mode: loop_runner::LoopMode::from_str(&mode),
                 plan_path: plan,
@@ -492,6 +620,7 @@ async fn main() -> Result<()> {
                 validation_commands: project_config.validation_commands,
                 cwd,
                 stream_fn: rho_provider::stream_fn_for_model(&model_config),
+                post_tools_hooks,
             };
 
             loop_runner::run_loop(loop_config, cancel).await?;
@@ -595,6 +724,8 @@ async fn main() -> Result<()> {
                 anyhow::bail!("--resume requires a writable session store");
             }
 
+            let output_format = OutputFormat::parse(&cli.output_format);
+
             let mut event_handler_cfg = session_store.clone().map(|store| EventHandlerConfig {
                 session_store: Some(store as Arc<dyn SessionPersistence>),
                 session_id: session_id.clone(),
@@ -603,7 +734,17 @@ async fn main() -> Result<()> {
             });
             let mut last_reported_session_id = None;
             if let Some(ref id) = session_id {
-                eprintln!("[session:{}]", id);
+                match output_format {
+                    OutputFormat::Text => {
+                        eprintln!("[session:{}]", id);
+                    }
+                    OutputFormat::StreamJson => {
+                        println!("{}", serde_json::json!({
+                            "type": "session",
+                            "session_id": id
+                        }));
+                    }
+                }
                 last_reported_session_id = Some(id.clone());
             }
 
@@ -614,6 +755,17 @@ async fn main() -> Result<()> {
                 eprintln!("\nInterrupted, cancelling...");
                 cancel_clone.cancel();
             });
+
+            let post_tools_hooks: Vec<Arc<dyn rho_core::hooks::PostToolsHook>> = project_config
+                .post_tools_hooks
+                .iter()
+                .map(|h| -> Arc<dyn rho_core::hooks::PostToolsHook> {
+                    Arc::new(rho_core::hooks::ShellCommandHook {
+                        config: h.clone(),
+                        cwd: cwd.clone(),
+                    })
+                })
+                .collect();
 
             if prompt_from_cli.is_none() && cli.resume.is_some() {
                 let resumed = session_id.as_deref().unwrap_or("unknown");
@@ -650,6 +802,8 @@ async fn main() -> Result<()> {
                         cancel.clone(),
                         &mut event_handler_cfg,
                         &mut last_reported_session_id,
+                        output_format,
+                        post_tools_hooks.clone(),
                     )
                     .await;
                 }
@@ -680,6 +834,8 @@ async fn main() -> Result<()> {
                     cancel,
                     &mut event_handler_cfg,
                     &mut last_reported_session_id,
+                    output_format,
+                    post_tools_hooks,
                 )
                 .await;
             }

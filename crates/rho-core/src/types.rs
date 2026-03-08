@@ -139,6 +139,14 @@ pub enum AgentEvent {
         compacted_estimate: usize,
         messages_pruned: usize,
     },
+    PostToolsHookStart {
+        hook_name: String,
+    },
+    PostToolsHookEnd {
+        hook_name: String,
+        success: bool,
+        summary: String,
+    },
 }
 
 // === Tool Result ===

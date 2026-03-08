@@ -1,12 +1,13 @@
 pub mod agent_loop;
-pub mod models;
 pub mod commands;
 pub mod compaction;
 pub mod config;
 pub mod error;
 pub mod event_handler;
 pub mod event_stream;
+pub mod hooks;
 pub mod memories;
+pub mod models;
 pub mod provider_types;
 pub mod skills;
 pub mod tool;

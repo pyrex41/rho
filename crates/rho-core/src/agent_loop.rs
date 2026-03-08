@@ -21,6 +21,7 @@ pub struct AgentLoopConfig {
     pub get_follow_up_messages: Option<Box<dyn Fn() -> Vec<Message> + Send + Sync>>,
     pub transform_messages:
         Option<Box<dyn Fn(&[Message], &Model) -> (Vec<Message>, Option<crate::compaction::CompactionResult>) + Send + Sync>>,
+    pub post_tools_hooks: Vec<Arc<dyn crate::hooks::PostToolsHook>>,
 }
 
 pub fn agent_loop(
@@ -178,6 +179,47 @@ async fn run_loop(
                         is_error,
                     })
                     .await;
+            }
+
+            // Run post-tools hooks if tools were called
+            if !tool_calls.is_empty() && !config.post_tools_hooks.is_empty() {
+                let tool_names: Vec<String> = tool_calls.iter().map(|(_, name, _)| name.clone()).collect();
+                for hook in &config.post_tools_hooks {
+                    if cancel.is_cancelled() {
+                        break 'outer;
+                    }
+                    let _ = stream.push(AgentEvent::PostToolsHookStart {
+                        hook_name: hook.name().to_string(),
+                    }).await;
+
+                    let hook_result = tokio::time::timeout(
+                        hook.timeout(),
+                        hook.execute(&tool_names, cancel.clone()),
+                    ).await;
+
+                    let result = match hook_result {
+                        Ok(r) => r,
+                        Err(_) => crate::hooks::PostToolsHookResult {
+                            steering_message: None,
+                            success: false,
+                            summary: format!("{}: timed out", hook.name()),
+                        },
+                    };
+
+                    let _ = stream.push(AgentEvent::PostToolsHookEnd {
+                        hook_name: hook.name().to_string(),
+                        success: result.success,
+                        summary: result.summary,
+                    }).await;
+
+                    // Inject steering message as User message (NOT in tool results)
+                    if let Some(steering) = result.steering_message {
+                        messages.push(Message::User {
+                            content: UserContent::Text(steering),
+                            timestamp: now_ms(),
+                        });
+                    }
+                }
             }
 
             let _ = stream
@@ -489,6 +531,7 @@ mod tests {
             get_steering_messages: None,
             get_follow_up_messages: None,
             transform_messages: None,
+            post_tools_hooks: vec![],
         };
 
         let prompts = vec![Message::User {
@@ -643,6 +686,7 @@ mod tests {
             get_steering_messages: None,
             get_follow_up_messages: None,
             transform_messages: None,
+            post_tools_hooks: vec![],
         };
 
         let prompts = vec![Message::User {
@@ -750,6 +794,7 @@ mod tests {
             get_steering_messages: None,
             get_follow_up_messages: None,
             transform_messages: None,
+            post_tools_hooks: vec![],
         };
 
         let prompts = vec![Message::User {

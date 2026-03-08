@@ -921,6 +921,7 @@ impl RhoApp {
             get_steering_messages: None,
             get_follow_up_messages: None,
             transform_messages,
+            post_tools_hooks: vec![],
         };
 
         let consumer = agent_loop(prompts, config, cancel);
