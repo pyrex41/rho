@@ -12,6 +12,8 @@ pub struct ProjectConfig {
     pub validation_commands: Vec<String>,
     pub compact_threshold: Option<f64>,
     pub memories: bool,
+    pub auto_commit: bool,
+    pub planning: bool,
     pub source: Option<PathBuf>,
 }
 
@@ -26,6 +28,8 @@ impl Default for ProjectConfig {
             validation_commands: Vec::new(),
             compact_threshold: Some(0.8),
             memories: true,
+            auto_commit: false,
+            planning: false,
             source: None,
         }
     }
@@ -150,6 +154,12 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                 }
                 "memories" => {
                     config.memories = value != "false";
+                }
+                "auto_commit" => {
+                    config.auto_commit = value == "true";
+                }
+                "planning" => {
+                    config.planning = value == "true";
                 }
                 "allowed_tools" => {
                     // Inline comma-separated list
@@ -276,6 +286,48 @@ This is a Rust workspace. Always run `cargo test` after changes.
             .system_prompt_append
             .unwrap()
             .contains("Be helpful"));
+    }
+
+    #[test]
+    fn parse_auto_commit_true() {
+        let content = "---\nauto_commit: true\n---\n";
+        let config = parse_rho_md(content, PathBuf::from("RHO.md"));
+        assert!(config.auto_commit);
+    }
+
+    #[test]
+    fn parse_auto_commit_false() {
+        let content = "---\nauto_commit: false\n---\n";
+        let config = parse_rho_md(content, PathBuf::from("RHO.md"));
+        assert!(!config.auto_commit);
+    }
+
+    #[test]
+    fn auto_commit_defaults_to_false() {
+        let content = "---\nmodel: claude-sonnet\n---\n";
+        let config = parse_rho_md(content, PathBuf::from("RHO.md"));
+        assert!(!config.auto_commit);
+    }
+
+    #[test]
+    fn parse_planning_true() {
+        let content = "---\nplanning: true\n---\n";
+        let config = parse_rho_md(content, PathBuf::from("RHO.md"));
+        assert!(config.planning);
+    }
+
+    #[test]
+    fn parse_planning_false() {
+        let content = "---\nplanning: false\n---\n";
+        let config = parse_rho_md(content, PathBuf::from("RHO.md"));
+        assert!(!config.planning);
+    }
+
+    #[test]
+    fn planning_defaults_to_false() {
+        let content = "---\nmodel: claude-sonnet\n---\n";
+        let config = parse_rho_md(content, PathBuf::from("RHO.md"));
+        assert!(!config.planning);
     }
 
     #[test]

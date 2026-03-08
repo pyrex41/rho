@@ -17,11 +17,18 @@ pub struct AgentLoopConfig {
     pub thinking: ThinkingLevel,
     pub max_tokens: Option<usize>,
     pub stream_fn: StreamFn,
+    pub planning: bool,
     pub get_steering_messages: Option<Box<dyn Fn() -> Vec<Message> + Send + Sync>>,
     pub get_follow_up_messages: Option<Box<dyn Fn() -> Vec<Message> + Send + Sync>>,
     pub transform_messages:
         Option<Box<dyn Fn(&[Message], &Model) -> (Vec<Message>, Option<crate::compaction::CompactionResult>) + Send + Sync>>,
 }
+
+const PLANNING_PROMPT_SUFFIX: &str = "\n\n\
+IMPORTANT: You are in planning mode. Before taking any actions or using any tools, \
+you MUST first produce a detailed step-by-step plan. Format it as a numbered list. \
+After producing the plan, wait for user approval before proceeding. \
+The user may approve the plan, request modifications, or reject it entirely.";
 
 pub fn agent_loop(
     prompts: Vec<Message>,
@@ -45,6 +52,14 @@ async fn run_loop(
 ) {
     let _ = stream.push(AgentEvent::AgentStart).await;
     let mut messages = prompts;
+    let mut is_first_turn = true;
+
+    // In planning mode, inject the planning instruction into the system prompt
+    let effective_system_prompt = if config.planning {
+        format!("{}{}", config.system_prompt, PLANNING_PROMPT_SUFFIX)
+    } else {
+        config.system_prompt.clone()
+    };
 
     'outer: loop {
         if cancel.is_cancelled() {
@@ -88,7 +103,7 @@ async fn run_loop(
             };
 
             let assistant_msg =
-                stream_assistant_response(&config, &effective_messages, &tool_defs, &stream).await;
+                stream_assistant_response(&config, &effective_system_prompt, &effective_messages, &tool_defs, &stream).await;
 
             let _ = stream
                 .push(AgentEvent::MessageEnd {
@@ -101,6 +116,18 @@ async fn run_loop(
             messages.push(assistant_msg.clone());
 
             if tool_calls.is_empty() {
+                // In planning mode, emit PlanProduced on the first turn with no tool calls
+                if config.planning && is_first_turn {
+                    let plan_text = extract_text_content(&assistant_msg);
+                    if !plan_text.is_empty() {
+                        let _ = stream
+                            .push(AgentEvent::PlanProduced {
+                                plan: plan_text,
+                            })
+                            .await;
+                    }
+                }
+
                 let _ = stream
                     .push(AgentEvent::TurnEnd {
                         message: assistant_msg,
@@ -108,11 +135,15 @@ async fn run_loop(
                     })
                     .await;
 
+                is_first_turn = false;
+
                 if matches!(stop_reason, StopReason::Error | StopReason::Aborted) {
                     break 'outer;
                 }
                 break; // break inner, check follow-up
             }
+
+            is_first_turn = false;
 
             // 3. Execute tool calls sequentially
             let mut tool_results = vec![];
@@ -212,6 +243,7 @@ async fn run_loop(
 
 async fn stream_assistant_response(
     config: &AgentLoopConfig,
+    system_prompt: &str,
     messages: &[Message],
     tool_defs: &[ToolDef],
     stream: &EventStreamProducer<AgentEvent, Vec<Message>>,
@@ -222,7 +254,7 @@ async fn stream_assistant_response(
     };
     let options = StreamOptions {
         api_key: config.api_key.clone(),
-        system_prompt: Some(config.system_prompt.clone()),
+        system_prompt: Some(system_prompt.to_string()),
         max_tokens: config.max_tokens,
         thinking: config.thinking,
     };
@@ -316,6 +348,24 @@ async fn stream_assistant_response(
             stop_reason,
             timestamp: now_ms(),
         }
+    }
+}
+
+/// Extract all text content from an assistant message, concatenated.
+fn extract_text_content(msg: &Message) -> String {
+    match msg {
+        Message::Assistant { content, .. } => content
+            .iter()
+            .filter_map(|c| {
+                if let Content::Text { text } = c {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
     }
 }
 
@@ -486,6 +536,7 @@ mod tests {
             thinking: ThinkingLevel::Off,
             max_tokens: None,
             stream_fn: mock_stream_fn(events, final_msg),
+            planning: false,
             get_steering_messages: None,
             get_follow_up_messages: None,
             transform_messages: None,
@@ -640,6 +691,7 @@ mod tests {
             thinking: ThinkingLevel::Off,
             max_tokens: None,
             stream_fn,
+            planning: false,
             get_steering_messages: None,
             get_follow_up_messages: None,
             transform_messages: None,
@@ -747,6 +799,7 @@ mod tests {
             thinking: ThinkingLevel::Off,
             max_tokens: None,
             stream_fn,
+            planning: false,
             get_steering_messages: None,
             get_follow_up_messages: None,
             transform_messages: None,

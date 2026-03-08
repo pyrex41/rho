@@ -95,6 +95,7 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
             thinking: config.thinking,
             max_tokens: None,
             stream_fn: config.stream_fn.clone(),
+            planning: false,
             get_steering_messages: None,
             get_follow_up_messages: None,
             transform_messages: None,

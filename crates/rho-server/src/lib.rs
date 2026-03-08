@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
+use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use futures::stream::Stream;
@@ -32,7 +33,6 @@ pub struct ServerState {
     cwd: PathBuf,
     tools: Vec<Arc<dyn AgentTool>>,
     system_prompt: String,
-    #[allow(dead_code)]
     auth_token: Option<String>,
 }
 
@@ -165,16 +165,70 @@ impl ServerBuilder {
             auth_token: self.auth_token,
         });
 
-        Router::new()
-            .route("/health", get(health))
+        let authenticated_routes = Router::new()
             .route("/v1/sessions", post(create_session))
             .route("/v1/sessions", get(list_sessions))
             .route("/v1/sessions/{id}", get(get_session))
             .route("/v1/sessions/{id}", delete(delete_session))
             .route("/v1/sessions/{id}/send", post(send_message))
             .route("/v1/sessions/{id}/events", get(session_events))
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ));
+
+        Router::new()
+            .route("/health", get(health))
+            .merge(authenticated_routes)
             .with_state(state)
     }
+}
+
+// === Auth Middleware ===
+
+async fn auth_middleware(
+    State(state): State<Arc<ServerState>>,
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, axum::response::Response> {
+    let Some(ref expected_token) = state.auth_token else {
+        // No auth configured (--no-auth mode), allow all requests
+        return Ok(next.run(req).await);
+    };
+
+    let unauthorized = || {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "unauthorized"})),
+        )
+            .into_response()
+    };
+
+    let Some(auth_header) = req.headers().get(axum::http::header::AUTHORIZATION) else {
+        return Err(unauthorized());
+    };
+
+    let Ok(auth_value) = auth_header.to_str() else {
+        return Err(unauthorized());
+    };
+
+    let Some(token) = auth_value.strip_prefix("Bearer ") else {
+        return Err(unauthorized());
+    };
+
+    // Constant-time-ish comparison to prevent timing attacks
+    if token.len() != expected_token.len()
+        || token
+            .as_bytes()
+            .iter()
+            .zip(expected_token.as_bytes().iter())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            != 0
+    {
+        return Err(unauthorized());
+    }
+
+    Ok(next.run(req).await)
 }
 
 // === Route Handlers ===
@@ -352,6 +406,7 @@ async fn run_agent_for_session(
         thinking,
         max_tokens: None,
         stream_fn: rho_provider::stream_fn_for_model(&model_config),
+        planning: false,
         get_steering_messages: None,
         get_follow_up_messages: None,
         transform_messages,

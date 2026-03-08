@@ -6,17 +6,27 @@ use tokio_util::sync::CancellationToken;
 
 pub struct WriteTool {
     working_dir: Option<std::path::PathBuf>,
+    auto_commit: bool,
 }
 
 impl WriteTool {
     pub fn new() -> Self {
-        WriteTool { working_dir: None }
+        WriteTool {
+            working_dir: None,
+            auto_commit: false,
+        }
     }
 
     pub fn with_cwd(cwd: std::path::PathBuf) -> Self {
         WriteTool {
             working_dir: Some(cwd),
+            auto_commit: false,
         }
+    }
+
+    pub fn with_auto_commit(mut self, auto_commit: bool) -> Self {
+        self.auto_commit = auto_commit;
+        self
     }
 
     fn resolve_path(&self, path: &str) -> std::path::PathBuf {
@@ -98,6 +108,11 @@ impl AgentTool for WriteTool {
         tokio::fs::write(&file_path, content)
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+
+        // Auto-commit if enabled
+        if self.auto_commit {
+            crate::git_helpers::auto_commit_file(&file_path, "write");
+        }
 
         Ok(ToolResult {
             content: vec![Content::Text {

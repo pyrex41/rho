@@ -66,6 +66,14 @@ struct Cli {
     /// Append to system prompt
     #[arg(long)]
     system_append: Option<String>,
+
+    /// Branch from an existing session (use with --resume)
+    #[arg(long)]
+    branch: bool,
+
+    /// Enable planning mode (produce plan before executing)
+    #[arg(long)]
+    plan: bool,
 }
 
 #[derive(Subcommand)]
@@ -168,11 +176,11 @@ web requests (curl), or any CLI operation, use bash.";
 /// Default 5 core tools — the model can use bash for grep/find/web operations.
 const DEFAULT_TOOLS: &[&str] = &["read", "write", "edit", "bash", "task"];
 
-fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>, all_tools_flag: bool) -> Vec<Arc<dyn AgentTool>> {
+fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>, all_tools_flag: bool, auto_commit: bool) -> Vec<Arc<dyn AgentTool>> {
     let every_tool: Vec<Arc<dyn AgentTool>> = vec![
         Arc::new(rho_tools::read::ReadTool::with_cwd(cwd.clone())),
-        Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone())),
-        Arc::new(rho_tools::edit::EditTool::with_cwd(cwd.clone())),
+        Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone()).with_auto_commit(auto_commit)),
+        Arc::new(rho_tools::edit::EditTool::with_cwd(cwd.clone()).with_auto_commit(auto_commit)),
         Arc::new(rho_tools::bash::BashTool::new(cwd.clone())),
         Arc::new(rho_tools::grep::GrepTool::new(cwd.clone())),
         Arc::new(rho_tools::find::FindTool::new(cwd.clone())),
@@ -352,6 +360,7 @@ async fn run_agent_turn(
     model_config: &ModelConfig,
     compact_threshold: Option<f64>,
     show_thinking: bool,
+    planning: bool,
     cancel: CancellationToken,
     session_handler: &mut Option<EventHandlerConfig>,
     last_reported_session_id: &mut Option<String>,
@@ -365,6 +374,7 @@ async fn run_agent_turn(
         thinking,
         max_tokens: None,
         stream_fn: rho_provider::stream_fn_for_model(model_config),
+        planning,
         get_steering_messages: None,
         get_follow_up_messages: None,
         transform_messages,
@@ -431,6 +441,13 @@ async fn run_agent_turn(
                     "[compact] {} -> {} tokens (estimated)",
                     original_estimate, compacted_estimate
                 );
+            }
+            AgentEvent::PlanProduced { plan } => {
+                eprintln!("\n[plan] Plan produced. Review the plan above and respond with:");
+                eprintln!("  - \"approved\" to proceed with execution");
+                eprintln!("  - modifications to adjust the plan");
+                eprintln!("  - \"reject\" to cancel");
+                let _ = plan; // plan text already printed via TextDelta events
             }
             AgentEvent::AgentEnd { messages } => {
                 final_messages = messages;
@@ -509,7 +526,7 @@ async fn main() -> Result<()> {
                 } else {
                     project_config.allowed_tools.clone()
                 };
-            let tools = build_tools(&cwd, &default_tools, true);
+            let tools = build_tools(&cwd, &default_tools, true, project_config.auto_commit);
             let system_prompt = build_system_prompt(&cwd, &project_config, None, &tools);
 
             let cancel = CancellationToken::new();
@@ -574,7 +591,7 @@ async fn main() -> Result<()> {
                 }
             };
 
-            let tools = build_tools(&cwd, &project_config.allowed_tools, all_tools);
+            let tools = build_tools(&cwd, &project_config.allowed_tools, all_tools, project_config.auto_commit);
             let system_prompt = build_system_prompt(&cwd, &project_config, None, &tools);
 
             // Generate auth token
@@ -662,7 +679,8 @@ async fn main() -> Result<()> {
 
             // Merge tool restrictions: CLI flag overrides config
             let allowed_tools = cli.tools.or(project_config.allowed_tools.clone());
-            let tools = build_tools(&cwd, &allowed_tools, cli.all_tools);
+            let tools = build_tools(&cwd, &allowed_tools, cli.all_tools, project_config.auto_commit);
+            let planning = cli.plan || project_config.planning;
 
             let system_prompt =
                 build_system_prompt(&cwd, &project_config, cli.system_append.as_deref(), &tools);
@@ -703,10 +721,34 @@ async fn main() -> Result<()> {
                             store_path.display()
                         );
                     }
-                    history = store
-                        .load_messages(existing_id)
-                        .with_context(|| format!("Failed to load session '{}'", existing_id))?;
+                    if cli.branch {
+                        // Branch: create a new session that inherits parent messages
+                        let new_id = store
+                            .branch_session(existing_id)
+                            .with_context(|| {
+                                format!("Failed to branch session '{}'", existing_id)
+                            })?;
+                        eprintln!(
+                            "[branched session {} from {}]",
+                            new_id, existing_id
+                        );
+                        history = store
+                            .load_messages(&new_id)
+                            .with_context(|| {
+                                format!("Failed to load branched session '{}'", new_id)
+                            })?;
+                        session_id = Some(new_id);
+                    } else {
+                        history = store
+                            .load_messages(existing_id)
+                            .with_context(|| {
+                                format!("Failed to load session '{}'", existing_id)
+                            })?;
+                    }
                 } else {
+                    if cli.branch {
+                        anyhow::bail!("--branch requires --resume <session-id> to specify which session to branch from");
+                    }
                     let session = store
                         .create_session(&model_id, &cwd)
                         .with_context(|| "Failed to create session")?;
@@ -714,6 +756,8 @@ async fn main() -> Result<()> {
                 }
             } else if cli.resume.is_some() {
                 anyhow::bail!("--resume requires a writable session store");
+            } else if cli.branch {
+                anyhow::bail!("--branch requires --resume <session-id> to specify which session to branch from");
             }
 
             let mut event_handler_cfg = session_store.clone().map(|store| EventHandlerConfig {
@@ -768,6 +812,7 @@ async fn main() -> Result<()> {
                         &model_config,
                         project_config.compact_threshold,
                         cli.show_thinking,
+                        planning,
                         cancel.clone(),
                         &mut event_handler_cfg,
                         &mut last_reported_session_id,
@@ -798,6 +843,7 @@ async fn main() -> Result<()> {
                     &model_config,
                     project_config.compact_threshold,
                     cli.show_thinking,
+                    planning,
                     cancel,
                     &mut event_handler_cfg,
                     &mut last_reported_session_id,

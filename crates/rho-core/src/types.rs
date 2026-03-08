@@ -139,6 +139,9 @@ pub enum AgentEvent {
         compacted_estimate: usize,
         messages_pruned: usize,
     },
+    PlanProduced {
+        plan: String,
+    },
 }
 
 // === Tool Result ===

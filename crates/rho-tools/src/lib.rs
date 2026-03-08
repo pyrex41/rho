@@ -7,3 +7,4 @@ pub mod edit;
 pub mod task;
 pub mod web_fetch;
 pub mod web_search;
+pub mod git_helpers;

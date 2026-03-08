@@ -17,6 +17,7 @@ pub struct Session {
     pub model: String,
     pub created_at: String,
     pub cwd: String,
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +42,8 @@ impl SessionStore {
                 model TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                cwd TEXT NOT NULL
+                cwd TEXT NOT NULL,
+                parent_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -55,12 +57,25 @@ impl SessionStore {
 
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);",
         )?;
+        // Migration: add parent_id column if it doesn't exist (for pre-existing databases)
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN parent_id TEXT;",
+        ).ok(); // Ignore error if column already exists
         Ok(Self {
             conn: Mutex::new(conn),
         })
     }
 
     pub fn create_session(&self, model: &str, cwd: &Path) -> Result<Session, rusqlite::Error> {
+        self.create_session_with_parent(model, cwd, None)
+    }
+
+    pub fn create_session_with_parent(
+        &self,
+        model: &str,
+        cwd: &Path,
+        parent_id: Option<&str>,
+    ) -> Result<Session, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -68,9 +83,9 @@ impl SessionStore {
         let title = "New session".to_string();
 
         conn.execute(
-            "INSERT INTO sessions (id, title, model, created_at, updated_at, cwd)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, title, model, now, now, cwd_str],
+            "INSERT INTO sessions (id, title, model, created_at, updated_at, cwd, parent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, title, model, now, now, cwd_str, parent_id],
         )?;
 
         Ok(Session {
@@ -79,6 +94,7 @@ impl SessionStore {
             model: model.to_string(),
             created_at: now.clone(),
             cwd: cwd_str,
+            parent_id: parent_id.map(String::from),
         })
     }
 
@@ -187,6 +203,72 @@ impl SessionStore {
         tx.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Create a new session that branches from an existing parent session.
+    /// All messages from the parent are copied into the new session.
+    /// Returns the new session's ID.
+    pub fn branch_session(&self, parent_id: &str) -> Result<String, rusqlite::Error> {
+        // First, load parent session metadata
+        let (model, cwd) = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt =
+                conn.prepare("SELECT model, cwd FROM sessions WHERE id = ?1")?;
+            stmt.query_row(params![parent_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+        };
+
+        // Load parent messages
+        let parent_messages = self.load_messages(parent_id)?;
+
+        // Create the new session with parent_id set
+        let new_session = self.create_session_with_parent(
+            &model,
+            Path::new(&cwd),
+            Some(parent_id),
+        )?;
+
+        // Copy parent messages into the new session
+        if !parent_messages.is_empty() {
+            self.save_messages(&new_session.id, &parent_messages)?;
+        }
+
+        Ok(new_session.id)
+    }
+
+    /// Load messages from a session and all its ancestors (via parent_id chain),
+    /// in chronological order (oldest ancestor first).
+    pub fn load_session_with_parents(
+        &self,
+        id: &str,
+    ) -> Result<Vec<Message>, rusqlite::Error> {
+        // Walk the parent chain to collect session IDs from root to leaf
+        let mut chain = Vec::new();
+        let mut current_id = Some(id.to_string());
+
+        while let Some(ref sid) = current_id {
+            chain.push(sid.clone());
+            let conn = self.conn.lock().unwrap();
+            let mut stmt =
+                conn.prepare("SELECT parent_id FROM sessions WHERE id = ?1")?;
+            let parent: Option<String> = stmt
+                .query_row(params![sid], |row| row.get(0))
+                .unwrap_or(None);
+            current_id = parent;
+        }
+
+        // Reverse so we go from root ancestor to the current session
+        chain.reverse();
+
+        // Collect messages from each session in order
+        let mut all_messages = Vec::new();
+        for session_id in &chain {
+            let msgs = self.load_messages(session_id)?;
+            all_messages.extend(msgs);
+        }
+
+        Ok(all_messages)
     }
 }
 
@@ -456,5 +538,174 @@ mod tests {
             },
         ];
         assert_eq!(extract_title(&messages), "Real message");
+    }
+
+    #[test]
+    fn branch_session_copies_messages() {
+        let store = test_store();
+        let parent = store
+            .create_session("claude-sonnet", Path::new("/tmp"))
+            .unwrap();
+
+        let messages = vec![
+            Message::User {
+                content: UserContent::Text("hello".into()),
+                timestamp: 1000,
+            },
+            Message::Assistant {
+                content: vec![Content::Text {
+                    text: "hi there".into(),
+                }],
+                model: "claude-sonnet".into(),
+                usage: Usage::default(),
+                stop_reason: StopReason::Stop,
+                timestamp: 1001,
+            },
+        ];
+        store.save_messages(&parent.id, &messages).unwrap();
+
+        let branch_id = store.branch_session(&parent.id).unwrap();
+
+        // Branch should be a different session
+        assert_ne!(branch_id, parent.id);
+        assert!(store.session_exists(&branch_id).unwrap());
+
+        // Branch should have all parent messages copied
+        let branch_messages = store.load_messages(&branch_id).unwrap();
+        assert_eq!(branch_messages.len(), 2);
+
+        match &branch_messages[0] {
+            Message::User {
+                content: UserContent::Text(t),
+                ..
+            } => assert_eq!(t, "hello"),
+            _ => panic!("expected User message"),
+        }
+
+        // Parent messages should still be intact
+        let parent_messages = store.load_messages(&parent.id).unwrap();
+        assert_eq!(parent_messages.len(), 2);
+    }
+
+    #[test]
+    fn branch_session_sets_parent_id() {
+        let store = test_store();
+        let parent = store
+            .create_session("claude-sonnet", Path::new("/tmp"))
+            .unwrap();
+
+        let messages = vec![Message::User {
+            content: UserContent::Text("hello".into()),
+            timestamp: 1000,
+        }];
+        store.save_messages(&parent.id, &messages).unwrap();
+
+        let branch_id = store.branch_session(&parent.id).unwrap();
+
+        // Verify the parent_id is set by checking via SQL
+        let conn = store.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT parent_id FROM sessions WHERE id = ?1")
+            .unwrap();
+        let stored_parent: Option<String> = stmt
+            .query_row(params![branch_id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored_parent.as_deref(), Some(parent.id.as_str()));
+    }
+
+    #[test]
+    fn branch_session_from_empty_parent() {
+        let store = test_store();
+        let parent = store
+            .create_session("claude-sonnet", Path::new("/tmp"))
+            .unwrap();
+
+        // Branch from a session with no messages
+        let branch_id = store.branch_session(&parent.id).unwrap();
+        let branch_messages = store.load_messages(&branch_id).unwrap();
+        assert!(branch_messages.is_empty());
+    }
+
+    #[test]
+    fn load_session_with_parents_single_session() {
+        let store = test_store();
+        let session = store
+            .create_session("claude-sonnet", Path::new("/tmp"))
+            .unwrap();
+
+        let messages = vec![Message::User {
+            content: UserContent::Text("hello".into()),
+            timestamp: 1000,
+        }];
+        store.save_messages(&session.id, &messages).unwrap();
+
+        // For a root session, load_session_with_parents should return just its own messages
+        let loaded = store.load_session_with_parents(&session.id).unwrap();
+        assert_eq!(loaded.len(), 1);
+    }
+
+    #[test]
+    fn load_session_with_parents_chain() {
+        let store = test_store();
+
+        // Create root session with messages
+        let root = store
+            .create_session("claude-sonnet", Path::new("/tmp"))
+            .unwrap();
+        let root_messages = vec![Message::User {
+            content: UserContent::Text("root message".into()),
+            timestamp: 1000,
+        }];
+        store.save_messages(&root.id, &root_messages).unwrap();
+
+        // Branch from root
+        let branch1_id = store.branch_session(&root.id).unwrap();
+        // Add a new message to branch1
+        let mut branch1_msgs = store.load_messages(&branch1_id).unwrap();
+        branch1_msgs.push(Message::User {
+            content: UserContent::Text("branch1 message".into()),
+            timestamp: 2000,
+        });
+        store.save_messages(&branch1_id, &branch1_msgs).unwrap();
+
+        // Branch from branch1
+        let branch2_id = store.branch_session(&branch1_id).unwrap();
+        // Add a new message to branch2
+        let mut branch2_msgs = store.load_messages(&branch2_id).unwrap();
+        branch2_msgs.push(Message::User {
+            content: UserContent::Text("branch2 message".into()),
+            timestamp: 3000,
+        });
+        store.save_messages(&branch2_id, &branch2_msgs).unwrap();
+
+        // load_session_with_parents on branch2 should return messages from
+        // root + branch1 + branch2 in order
+        let all = store.load_session_with_parents(&branch2_id).unwrap();
+
+        // root has 1 msg, branch1 has 2 (copied root + its own), branch2 has 3 (copied + its own)
+        // The chain walks: root -> branch1 -> branch2
+        // root messages: ["root message"]
+        // branch1 messages: ["root message", "branch1 message"]
+        // branch2 messages: ["root message", "branch1 message", "branch2 message"]
+        // Total concatenated: 1 + 2 + 3 = 6
+        assert_eq!(all.len(), 6);
+
+        // First message should be from the root
+        match &all[0] {
+            Message::User {
+                content: UserContent::Text(t),
+                ..
+            } => assert_eq!(t, "root message"),
+            _ => panic!("expected root User message"),
+        }
+
+        // Last message should be from branch2
+        match &all[5] {
+            Message::User {
+                content: UserContent::Text(t),
+                ..
+            } => assert_eq!(t, "branch2 message"),
+            _ => panic!("expected branch2 User message"),
+        }
     }
 }

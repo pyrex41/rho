@@ -7,17 +7,27 @@ use tokio_util::sync::CancellationToken;
 
 pub struct EditTool {
     working_dir: Option<std::path::PathBuf>,
+    auto_commit: bool,
 }
 
 impl EditTool {
     pub fn new() -> Self {
-        EditTool { working_dir: None }
+        EditTool {
+            working_dir: None,
+            auto_commit: false,
+        }
     }
 
     pub fn with_cwd(cwd: std::path::PathBuf) -> Self {
         EditTool {
             working_dir: Some(cwd),
+            auto_commit: false,
         }
+    }
+
+    pub fn with_auto_commit(mut self, auto_commit: bool) -> Self {
+        self.auto_commit = auto_commit;
+        self
     }
 
     fn resolve_path(&self, path: &str) -> std::path::PathBuf {
@@ -191,6 +201,11 @@ The file must already exist — use the `write` tool to create new files."
         tokio::fs::write(&path, &result).await.map_err(|e| {
             ToolError::ExecutionFailed(format!("Failed to write {}: {}", path.display(), e))
         })?;
+
+        // Auto-commit if enabled
+        if self.auto_commit {
+            crate::git_helpers::auto_commit_file(&path, "edit");
+        }
 
         // Generate diff summary
         let diff = make_diff(&original, &result);
