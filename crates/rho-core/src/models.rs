@@ -233,6 +233,40 @@ fn built_in_models() -> Vec<ModelConfig> {
             thinking: false,
             server_tools: None,
         },
+        // xAI Grok 4.20 experimental beta
+        ModelConfig {
+            id: "grok-4.20-reasoning".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-4.20-experimental-beta-0304-reasoning".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: true,
+            server_tools: None,
+        },
+        ModelConfig {
+            id: "grok-4.20-non-reasoning".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-4.20-experimental-beta-0304-non-reasoning".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: false,
+            server_tools: None,
+        },
+        ModelConfig {
+            id: "grok-4.20-multi-agent".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-4.20-multi-agent-experimental-beta-0304".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: false,
+            server_tools: None,
+        },
     ]
 }
 
@@ -243,8 +277,8 @@ mod tests {
     #[test]
     fn new_has_builtin_models() {
         let registry = ModelRegistry::new();
-        // 3 Anthropic + 3 xAI/Grok
-        assert_eq!(registry.list().len(), 6);
+        // 3 Anthropic + 6 xAI/Grok
+        assert_eq!(registry.list().len(), 9);
     }
 
     #[test]
