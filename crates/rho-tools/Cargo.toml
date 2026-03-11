@@ -1,14 +1,14 @@
 [package]
 name = "rho-tools"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 description = "Built-in tools for the rho AI coding agent"
 license = "MIT"
 repository = "https://github.com/pyrex41/rho"
 
 [dependencies]
-rho-core = { version = "0.2.4", path = "../rho-core" }
-rho-hashline = { version = "0.2.4", path = "../rho-hashline" }
+rho-core = { version = "0.2.5", path = "../rho-core" }
+rho-hashline = { version = "0.2.5", path = "../rho-hashline" }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
