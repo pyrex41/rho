@@ -267,6 +267,52 @@ fn built_in_models() -> Vec<ModelConfig> {
             thinking: false,
             server_tools: None,
         },
+        // Additional xAI models
+        ModelConfig {
+            id: "grok-code-fast-1".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-code-fast-1".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: false,
+            server_tools: None,
+        },
+        ModelConfig {
+            id: "grok-4-1-reasoning".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-4-1-reasoning".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: true,
+            server_tools: None,
+        },
+        ModelConfig {
+            id: "grok-4.20-beta-0309-reasoning".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-4.20-beta-0309-reasoning".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: true,
+            server_tools: None,
+        },
+        ModelConfig {
+            id: "grok-4.20-multi-agent-beta-0309".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-4.20-multi-agent-beta-0309".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: false,
+            server_tools: None,
+        },
+
     ]
 }
 
@@ -277,8 +323,8 @@ mod tests {
     #[test]
     fn new_has_builtin_models() {
         let registry = ModelRegistry::new();
-        // 3 Anthropic + 6 xAI/Grok
-        assert_eq!(registry.list().len(), 9);
+        // 3 Anthropic + 10 xAI/Grok
+        assert_eq!(registry.list().len(), 13);
     }
 
     #[test]
