@@ -25,6 +25,14 @@ cd rho
 cargo install --path .
 ```
 
+### Install script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pyrex41/rho/main/install.sh | bash
+```
+
+This detects your OS and architecture, downloads the latest release binary, and installs it to `~/.local/bin` (or a directory you specify with `RHO_INSTALL_DIR`).
+
 ### Pre-built binaries
 
 Download from [GitHub Releases](https://github.com/pyrex41/rho/releases). Binaries are available for:
@@ -165,12 +173,9 @@ crates/
 ├── rho-core        # Agent loop, types, config, event system
 ├── rho-provider    # LLM provider implementations (Anthropic, OpenAI-compat)
 ├── rho-tools       # Built-in tool implementations
-├── rho-session     # SQLite session persistence
 ├── rho-hashline    # LINE:HASH file anchoring
-├── anthropic-auth  # OAuth PKCE + API key management
-├── rho-gui         # GUI frontend (iced, in development)
-├── rho-cli         # CLI crate stub
-└── rho-lib         # Shared utilities
+├── rho-server      # HTTP server mode
+└── rho-gui         # GUI frontend (iced, in development)
 src/
 ├── main.rs         # CLI entry point
 └── loop_runner.rs  # Autonomous loop logic
