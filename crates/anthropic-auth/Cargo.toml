@@ -1,6 +1,6 @@
 [package]
 name = "rho-auth"
-version = "0.2.0"
+version = "0.2.4"
 edition = "2021"
 description = "Anthropic API authentication (OAuth PKCE + API key)"
 license = "MIT"

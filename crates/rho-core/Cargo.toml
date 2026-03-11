@@ -1,6 +1,6 @@
 [package]
 name = "rho-core"
-version = "0.2.0"
+version = "0.2.4"
 edition = "2021"
 description = "Core types and agent loop for the rho AI coding agent"
 license = "MIT"
@@ -16,7 +16,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 dirs = "5"
 toml = { workspace = true }
-anthropic-auth = { version = "0.2.0", path = "../anthropic-auth", package = "rho-auth" }
+anthropic-auth = { version = "0.2.4", path = "../anthropic-auth", package = "rho-auth" }
 
 [dev-dependencies]
 tempfile = "3"

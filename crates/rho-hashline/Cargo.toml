@@ -1,6 +1,6 @@
 [package]
 name = "rho-hashline"
-version = "0.2.0"
+version = "0.2.4"
 edition = "2021"
 description = "Line-level hashing for file editing anchors"
 license = "MIT"
