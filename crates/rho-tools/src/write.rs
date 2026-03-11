@@ -99,6 +99,8 @@ impl AgentTool for WriteTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
+        crate::git_helpers::auto_commit_file(&file_path, "write").await;
+
         Ok(ToolResult {
             content: vec![Content::Text {
                 text: format!("Successfully wrote {} bytes to {}", bytes, path),

@@ -14,7 +14,7 @@ use rho_core::event_handler::{handle_event, EventHandlerConfig, SessionPersisten
 use rho_core::models::{ModelConfig, ModelRegistry, ProviderType};
 use rho_core::tool::AgentTool;
 use rho_core::types::*;
-use rho_session::SessionStore;
+use rho_core::session::SessionStore;
 
 mod loop_runner;
 
@@ -84,7 +84,52 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum AuthCommands {
+    /// Log in via OAuth (opens browser)
+    Login,
+    /// Print the current API token
+    Token,
+    /// Show authentication status
+    Status,
+}
+
+#[derive(Subcommand)]
 enum Commands {
+    /// Manage Anthropic authentication (login, token, status)
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommands,
+    },
+    /// Start HTTP server mode
+    Server {
+        /// Host to bind to
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+
+        /// Port to listen on
+        #[arg(long, default_value_t = 3000)]
+        port: u16,
+
+        /// Optional bearer token for authentication
+        #[arg(long)]
+        bearer_token: Option<String>,
+
+        /// Model ID to use
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Thinking level
+        #[arg(long)]
+        thinking: Option<String>,
+
+        /// Override API key
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// Working directory
+        #[arg(short = 'C', long)]
+        directory: Option<PathBuf>,
+    },
     /// Run autonomous loop (Ralph pattern)
     Loop {
         /// Loop mode: "build" or "plan"
@@ -532,6 +577,129 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Some(Commands::Auth { command }) => {
+            match command {
+                AuthCommands::Login => {
+                    match rho_core::auth::oauth::login().await {
+                        Ok(_) => eprintln!("Login successful."),
+                        Err(e) => {
+                            eprintln!("Login failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                AuthCommands::Token => {
+                    match rho_core::auth::get_token() {
+                        Ok(token) => print!("{token}"),
+                        Err(e) => {
+                            eprintln!("Error: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                AuthCommands::Status => {
+                    // Check env var
+                    if let Ok(val) = std::env::var("ANTHROPIC_API_KEY") {
+                        if !val.is_empty() {
+                            if rho_core::auth::is_oauth_token(&val) {
+                                println!("Authenticated via ANTHROPIC_API_KEY (OAuth token)");
+                            } else {
+                                println!("Authenticated via ANTHROPIC_API_KEY");
+                            }
+                            return Ok(());
+                        }
+                    }
+                    // Check keychain / file credentials via get_token
+                    match rho_core::auth::get_token() {
+                        Ok(token) => {
+                            if rho_core::auth::is_oauth_token(&token) {
+                                println!("Authenticated via keychain/OAuth");
+                            } else {
+                                println!("Authenticated via keychain");
+                            }
+                        }
+                        Err(_) => {
+                            // Check file credentials specifically
+                            if let Ok(creds) = rho_core::auth::oauth::load_credentials() {
+                                if !creds.access_token.is_empty() {
+                                    let expired = creds
+                                        .expires_at
+                                        .map(|exp| {
+                                            let now = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs();
+                                            now >= exp
+                                        })
+                                        .unwrap_or(false);
+                                    if expired {
+                                        println!("Authenticated via OAuth file credentials (token expired)");
+                                    } else {
+                                        println!("Authenticated via OAuth file credentials");
+                                    }
+                                    return Ok(());
+                                }
+                            }
+                            println!("Not authenticated");
+                        }
+                    }
+                }
+            }
+        }
+        Some(Commands::Server {
+            host,
+            port,
+            bearer_token,
+            model,
+            thinking,
+            api_key,
+            directory,
+        }) => {
+            let cwd = match directory {
+                Some(dir) => std::fs::canonicalize(&dir)
+                    .with_context(|| format!("Invalid directory: {}", dir.display()))?,
+                None => std::env::current_dir().context("Failed to get current directory")?,
+            };
+
+            let project_config = load_project_config(&cwd);
+
+            let model_id = model
+                .or(project_config.model.clone())
+                .unwrap_or_else(|| "claude-sonnet".into());
+            let thinking_str = thinking.unwrap_or_else(|| {
+                project_config
+                    .thinking
+                    .map(|t| format!("{:?}", t).to_lowercase())
+                    .unwrap_or_else(|| "off".into())
+            });
+            let thinking_level = parse_thinking(&thinking_str);
+
+            let registry = ModelRegistry::load();
+            let model_config = resolve_model_config(&model_id, &registry, thinking_level);
+
+            let resolved_api_key = match api_key {
+                Some(key) => key,
+                None => {
+                    ModelRegistry::resolve_api_key(&model_config).map_err(|e| anyhow::anyhow!(e))?
+                }
+            };
+
+            let allowed_tools = project_config.allowed_tools.clone();
+            let cwd_for_tools = cwd.clone();
+
+            let server_config = rho_server::ServerConfig {
+                model_config,
+                api_key: resolved_api_key,
+                system_prompt: build_system_prompt(&cwd, &project_config, None),
+                tools_factory: Arc::new(move || build_tools(&cwd_for_tools, &allowed_tools)),
+                thinking: thinking_level,
+                bearer_token,
+                compact_threshold: project_config.compact_threshold,
+                cwd: cwd.clone(),
+            };
+
+            rho_server::start_server_with_addr(server_config, &host, port).await?;
+        }
         Some(Commands::Loop {
             mode,
             plan,

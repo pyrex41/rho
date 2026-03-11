@@ -142,7 +142,7 @@ impl ModelRegistry {
 
         // 2. For Anthropic, try keychain / OAuth credentials
         if config.provider == ProviderType::Anthropic {
-            if let Ok(token) = anthropic_auth::get_token() {
+            if let Ok(token) = crate::auth::get_token() {
                 return Ok(token);
             }
         }

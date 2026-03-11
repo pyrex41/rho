@@ -1,5 +1,6 @@
 pub mod write;
 pub mod read;
+pub mod git_helpers;
 pub mod bash;
 pub mod grep;
 pub mod find;

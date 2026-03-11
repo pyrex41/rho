@@ -18,7 +18,7 @@ use rho_core::tool::AgentTool;
 use rho_core::types::*;
 
 use rho_core::event_handler::{EventHandlerConfig, EventHandlerResult};
-use rho_session::SessionStore;
+use rho_core::session::SessionStore;
 
 use crate::autocomplete::{self, AutocompleteState, AutocompleteTrigger};
 
@@ -168,7 +168,7 @@ pub struct RhoApp {
     // Session persistence
     pub session_store: Arc<SessionStore>,
     pub current_session_id: Option<String>,
-    pub session_list: Vec<rho_session::SessionSummary>,
+    pub session_list: Vec<rho_core::session::SessionSummary>,
     pub event_handler_config: EventHandlerConfig,
     // Sidebar data
     pub total_input_tokens: u64,
@@ -221,7 +221,7 @@ impl RhoApp {
     pub fn new() -> (Self, IcedTask<Message>) {
         // Temporarily use the default Anthropic token for initial load;
         // will be properly resolved once model_config is built below.
-        let initial_api_key = anthropic_auth::get_token().ok();
+        let initial_api_key = rho_core::auth::get_token().ok();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
         let skill_dirs = rho_core::skills::default_skill_dirs(&cwd);

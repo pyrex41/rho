@@ -1,6 +1,6 @@
 [package]
 name = "rho-gui"
-version = "0.2.5"
+version = "0.3.0"
 edition = "2021"
 publish = false
 
@@ -12,8 +12,6 @@ path = "src/main.rs"
 rho-core = { path = "../rho-core" }
 rho-provider = { path = "../rho-provider" }
 rho-tools = { path = "../rho-tools" }
-anthropic-auth = { version = "0.2.5", path = "../anthropic-auth", package = "rho-auth" }
-rho-session = { path = "../rho-session" }
 iced = { version = "0.14", features = ["markdown", "highlighter", "tokio"] }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

@@ -77,7 +77,7 @@ async fn do_stream_inner(
         .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json");
 
-    if anthropic_auth::is_oauth_token(&options.api_key) {
+    if rho_core::auth::is_oauth_token(&options.api_key) {
         req = req
             .header("Authorization", format!("Bearer {}", options.api_key))
             .header("anthropic-beta", "oauth-2025-04-20");

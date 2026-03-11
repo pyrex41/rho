@@ -192,6 +192,8 @@ The file must already exist — use the `write` tool to create new files."
             ToolError::ExecutionFailed(format!("Failed to write {}: {}", path.display(), e))
         })?;
 
+        crate::git_helpers::auto_commit_file(&path, "edit").await;
+
         // Generate diff summary
         let diff = make_diff(&original, &result);
         let n = count_changed_lines(&original, &result);

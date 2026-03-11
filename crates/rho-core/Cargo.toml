@@ -1,6 +1,6 @@
 [package]
 name = "rho-core"
-version = "0.2.5"
+version = "0.3.0"
 edition = "2021"
 description = "Core types and agent loop for the rho AI coding agent"
 license = "MIT"
@@ -14,9 +14,16 @@ serde_json = { workspace = true }
 futures = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 dirs = "5"
 toml = { workspace = true }
-anthropic-auth = { version = "0.2.5", path = "../anthropic-auth", package = "rho-auth" }
+reqwest = { workspace = true }
+sha2 = "0.10"
+base64 = "0.22"
+open = "5"
+rusqlite = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

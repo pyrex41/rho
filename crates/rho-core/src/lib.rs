@@ -1,3 +1,5 @@
+pub mod auth;
+pub mod session;
 pub mod agent_loop;
 pub mod commands;
 pub mod compaction;

@@ -1,20 +1,17 @@
 [workspace]
 members = [
     "crates/rho-core",
-    "crates/rho-cli",
     "crates/rho-hashline",
-    "crates/rho-lib",
     "crates/rho-provider",
     "crates/rho-tools",
-    "crates/anthropic-auth",
+    "crates/rho-server",
     "crates/rho-gui",
-    "crates/rho-session",
 ]
 resolver = "2"
 
 [package]
 name = "rho-agent"
-version = "0.2.5"
+version = "0.3.0"
 edition = "2021"
 description = "AI coding agent with file tools"
 license = "MIT"
@@ -25,10 +22,10 @@ name = "rho-cli"
 path = "src/main.rs"
 
 [dependencies]
-rho-core = { version = "0.2.5", path = "crates/rho-core" }
-rho-provider = { version = "0.2.5", path = "crates/rho-provider" }
-rho-tools = { version = "0.2.5", path = "crates/rho-tools" }
-rho-session = { version = "0.2.5", path = "crates/rho-session" }
+rho-core = { version = "0.3.0", path = "crates/rho-core" }
+rho-provider = { version = "0.3.0", path = "crates/rho-provider" }
+rho-tools = { version = "0.3.0", path = "crates/rho-tools" }
+rho-server = { version = "0.3.0", path = "crates/rho-server" }
 tokio = { workspace = true }
 clap = { workspace = true }
 futures = { workspace = true }
