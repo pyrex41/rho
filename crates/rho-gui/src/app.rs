@@ -553,6 +553,7 @@ impl RhoApp {
                             let provider = match config.provider {
                                 ProviderType::Anthropic => "anthropic",
                                 ProviderType::OpenAi => "openai",
+                                ProviderType::XaiResponses => "xai-responses",
                             };
                             let msg = format!("Switched to **{}** ({})", model_id, provider);
                             self.messages.push(ConversationBlock::AssistantMarkdown {
@@ -750,6 +751,7 @@ impl RhoApp {
                         let provider = match m.provider {
                             ProviderType::Anthropic => "anthropic",
                             ProviderType::OpenAi => "openai",
+                            ProviderType::XaiResponses => "xai-responses",
                         };
                         let current = if m.id == self.model_config.id { " ◀ current" } else { "" };
                         format!("- **{}** ({}){}  ", m.id, provider, current)

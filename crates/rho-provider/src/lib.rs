@@ -5,6 +5,7 @@ pub mod openai_response;
 pub mod request;
 pub mod response;
 pub mod sse;
+pub mod xai_responses;
 
 use futures::StreamExt;
 use rho_core::event_stream::{EventStream, EventStreamProducer};
@@ -122,6 +123,9 @@ pub fn stream_fn_for_model(config: &ModelConfig) -> StreamFn {
     match config.provider {
         ProviderType::Anthropic => anthropic_stream_fn(),
         ProviderType::OpenAi => openai::openai_stream_fn(config.server_tools.clone()),
+        ProviderType::XaiResponses => {
+            xai_responses::xai_responses_stream_fn(config.server_tools.clone())
+        }
     }
 }
 
@@ -176,5 +180,21 @@ mod tests {
     #[test]
     fn test_stream_fn_for_model_openai_with_server_tools() {
         let _f = stream_fn_for_model(&openai_config());
+    }
+
+    #[test]
+    fn test_stream_fn_for_model_xai_responses() {
+        let config = ModelConfig {
+            id: "grok-4.20-multi-agent".into(),
+            provider: ProviderType::XaiResponses,
+            model_id: "grok-4.20-multi-agent-experimental-beta-0304".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: false,
+            server_tools: Some(vec!["web_search".into()]),
+        };
+        let _f = stream_fn_for_model(&config);
     }
 }

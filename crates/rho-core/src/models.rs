@@ -6,6 +6,8 @@ pub enum ProviderType {
     Anthropic,
     #[serde(alias = "openai-compatible")]
     OpenAi,
+    #[serde(alias = "xai-responses")]
+    XaiResponses,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +117,7 @@ impl ModelRegistry {
             provider: match config.provider {
                 ProviderType::Anthropic => "anthropic".into(),
                 ProviderType::OpenAi => "openai".into(),
+                ProviderType::XaiResponses => "xai-responses".into(),
             },
             base_url: config.base_url.clone(),
             reasoning: config.thinking,
@@ -258,7 +261,7 @@ fn built_in_models() -> Vec<ModelConfig> {
         },
         ModelConfig {
             id: "grok-4.20-multi-agent".into(),
-            provider: ProviderType::OpenAi,
+            provider: ProviderType::XaiResponses,
             model_id: "grok-4.20-multi-agent-experimental-beta-0304".into(),
             base_url: "https://api.x.ai/v1".into(),
             api_key_env: Some("XAI_API_KEY".into()),
@@ -303,7 +306,7 @@ fn built_in_models() -> Vec<ModelConfig> {
         },
         ModelConfig {
             id: "grok-4.20-multi-agent-beta-0309".into(),
-            provider: ProviderType::OpenAi,
+            provider: ProviderType::XaiResponses,
             model_id: "grok-4.20-multi-agent-beta-0309".into(),
             base_url: "https://api.x.ai/v1".into(),
             api_key_env: Some("XAI_API_KEY".into()),

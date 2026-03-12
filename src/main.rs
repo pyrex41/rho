@@ -238,26 +238,34 @@ fn resolve_model_config(
     registry: &ModelRegistry,
     thinking: ThinkingLevel,
 ) -> ModelConfig {
+    // Try exact match first
     if let Some(config) = registry.get(model_arg) {
         return config.clone();
     }
 
+    // Strip provider prefix (e.g. "xai/grok-code-fast-1" → "grok-code-fast-1")
+    let stripped = model_arg.split('/').last().unwrap_or(model_arg);
+    if stripped != model_arg {
+        if let Some(config) = registry.get(stripped) {
+            return config.clone();
+        }
+    }
+
     // Fallback: treat as raw model ID, infer provider from name
-    let provider = if model_arg.contains("claude") {
-        ProviderType::Anthropic
+    let (provider, api_key_env, base_url) = if model_arg.contains("claude") {
+        (ProviderType::Anthropic, "ANTHROPIC_API_KEY".into(), String::new())
+    } else if model_arg.contains("grok") {
+        (ProviderType::OpenAi, "XAI_API_KEY".into(), "https://api.x.ai/v1".into())
     } else {
-        ProviderType::OpenAi
+        (ProviderType::OpenAi, "OPENAI_API_KEY".into(), String::new())
     };
 
     ModelConfig {
         id: model_arg.to_string(),
         provider: provider.clone(),
-        model_id: model_arg.to_string(),
-        base_url: String::new(),
-        api_key_env: match provider {
-            ProviderType::Anthropic => Some("ANTHROPIC_API_KEY".into()),
-            ProviderType::OpenAi => Some("OPENAI_API_KEY".into()),
-        },
+        model_id: stripped.to_string(),
+        base_url,
+        api_key_env: Some(api_key_env),
         context_window: 200_000,
         max_tokens: if thinking != ThinkingLevel::Off {
             16_384
