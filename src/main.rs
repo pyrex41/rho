@@ -19,7 +19,7 @@ use rho_core::session::SessionStore;
 mod loop_runner;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum OutputFormat {
+pub enum OutputFormat {
     Text,
     StreamJson,
 }
@@ -163,6 +163,10 @@ enum Commands {
         /// Working directory
         #[arg(short = 'C', long)]
         directory: Option<PathBuf>,
+
+        /// Output format: text or stream-json
+        #[arg(long, default_value = "text")]
+        output_format: String,
     },
 }
 
@@ -726,6 +730,7 @@ async fn main() -> Result<()> {
             thinking,
             api_key,
             directory,
+            output_format,
         }) => {
             let cwd = match directory {
                 Some(dir) => std::fs::canonicalize(&dir)
@@ -792,6 +797,8 @@ async fn main() -> Result<()> {
                 })
                 .collect();
 
+            let output_format = OutputFormat::parse(&output_format);
+
             let loop_config = loop_runner::LoopConfig {
                 mode: loop_runner::LoopMode::from_str(&mode),
                 plan_path: plan,
@@ -806,6 +813,7 @@ async fn main() -> Result<()> {
                 cwd,
                 stream_fn: rho_provider::stream_fn_for_model(&model_config),
                 post_tools_hooks,
+                output_format,
             };
 
             loop_runner::run_loop(loop_config, cancel).await?;

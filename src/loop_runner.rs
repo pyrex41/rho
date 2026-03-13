@@ -22,6 +22,7 @@ pub struct LoopConfig {
     pub cwd: PathBuf,
     pub stream_fn: rho_core::provider_types::StreamFn,
     pub post_tools_hooks: Vec<Arc<dyn rho_core::hooks::PostToolsHook>>,
+    pub output_format: crate::OutputFormat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -210,9 +211,21 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
         last_commit: get_last_commit(&config.cwd),
     };
 
+    let json = config.output_format == crate::OutputFormat::StreamJson;
+
+    // Helper macro for JSON output on stdout
+    macro_rules! emit_json {
+        ($($json:tt)+) => {
+            if json {
+                println!("{}", serde_json::json!($($json)+));
+            }
+        };
+    }
+
     for iteration in 1..=config.max_iterations {
         if cancel.is_cancelled() {
             eprintln!("[loop] Cancelled");
+            emit_json!({"type": "loop_cancelled"});
             break;
         }
 
@@ -222,13 +235,21 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
             let reason = std::fs::read_to_string(&stop_file).unwrap_or_default();
             let _ = std::fs::remove_file(&stop_file);
             eprintln!("[loop] Stopped: {}", reason.trim());
+            emit_json!({"type": "loop_stopped", "reason": reason.trim()});
             break;
         }
 
+        let mode_str = format!("{:?}", config.mode).to_lowercase();
         eprintln!(
-            "\n[loop] === Iteration {}/{} ({:?} mode) ===",
-            iteration, config.max_iterations, config.mode
+            "\n[loop] === Iteration {}/{} ({} mode) ===",
+            iteration, config.max_iterations, mode_str
         );
+        emit_json!({
+            "type": "iteration_start",
+            "iteration": iteration,
+            "max_iterations": config.max_iterations,
+            "mode": mode_str
+        });
 
         // Build fresh prompt from deterministic context
         let prompt = build_iteration_prompt(&iter_ctx, config.mode, &plan_path_str);
@@ -258,58 +279,137 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
         let mut iteration_hook_results: Vec<HookSummary> = Vec::new();
         let agent_error: Option<String> = None;
 
-        // Consume all events, print to stderr, collect hook results
+        // Consume all events with format-switched output
         while let Some(event) = consumer.next().await {
-            match event {
-                AgentEvent::MessageUpdate { event, .. } => {
-                    if let AssistantStreamEvent::TextDelta { delta, .. } = event {
-                        eprint!("{}", delta);
+            if json {
+                match event {
+                    AgentEvent::MessageUpdate { event, .. } => {
+                        if let AssistantStreamEvent::TextDelta { delta, .. } = event {
+                            println!("{}", serde_json::json!({
+                                "type": "text_delta",
+                                "text": delta
+                            }));
+                        }
                     }
-                }
-                AgentEvent::ToolExecutionStart {
-                    tool_name, args, ..
-                } => {
-                    let args_summary = match serde_json::to_string(&args) {
-                        Ok(s) if s.len() > 200 => format!("{}...", &s[..200]),
-                        Ok(s) => s,
-                        Err(_) => String::new(),
-                    };
-                    eprintln!("\n[tool:{}] {}", tool_name, args_summary);
-                }
-                AgentEvent::ToolExecutionEnd {
-                    tool_name,
-                    is_error,
-                    ..
-                } => {
-                    if is_error {
-                        eprintln!("[tool:{}] ERROR", tool_name);
-                    } else {
-                        eprintln!("[tool:{}] done", tool_name);
+                    AgentEvent::ToolExecutionStart {
+                        tool_call_id,
+                        tool_name,
+                        args,
+                    } => {
+                        let input_summary = match serde_json::to_string(&args) {
+                            Ok(s) if s.len() > 200 => format!("{}...", &s[..200]),
+                            Ok(s) => s,
+                            Err(_) => String::new(),
+                        };
+                        println!("{}", serde_json::json!({
+                            "type": "tool_start",
+                            "tool_name": tool_name,
+                            "tool_id": tool_call_id,
+                            "input_summary": input_summary
+                        }));
                     }
-                }
-                AgentEvent::PostToolsHookStart { hook_name } => {
-                    eprintln!("[hook:{}] running...", hook_name);
-                }
-                AgentEvent::PostToolsHookEnd {
-                    hook_name,
-                    success,
-                    summary,
-                } => {
-                    if success {
-                        eprintln!("[hook:{}] {}", hook_name, summary);
-                    } else {
-                        eprintln!("[hook:{}] FAILED: {}", hook_name, summary);
+                    AgentEvent::ToolExecutionEnd {
+                        tool_call_id,
+                        tool_name,
+                        is_error,
+                        ..
+                    } => {
+                        println!("{}", serde_json::json!({
+                            "type": "tool_result",
+                            "tool_name": tool_name,
+                            "tool_id": tool_call_id,
+                            "success": !is_error
+                        }));
                     }
-                    iteration_hook_results.push(HookSummary {
-                        name: hook_name,
+                    AgentEvent::PostToolsHookStart { hook_name } => {
+                        println!("{}", serde_json::json!({
+                            "type": "hook_start",
+                            "hook_name": hook_name
+                        }));
+                    }
+                    AgentEvent::PostToolsHookEnd {
+                        hook_name,
                         success,
                         summary,
-                    });
+                    } => {
+                        println!("{}", serde_json::json!({
+                            "type": "hook_result",
+                            "hook_name": hook_name,
+                            "success": success,
+                            "summary": summary
+                        }));
+                        iteration_hook_results.push(HookSummary {
+                            name: hook_name,
+                            success,
+                            summary,
+                        });
+                    }
+                    AgentEvent::ContextCompacted {
+                        original_estimate,
+                        compacted_estimate,
+                        ..
+                    } => {
+                        println!("{}", serde_json::json!({
+                            "type": "context_compacted",
+                            "original_estimate": original_estimate,
+                            "compacted_estimate": compacted_estimate
+                        }));
+                    }
+                    AgentEvent::AgentEnd { .. } => {}
+                    _ => {}
                 }
-                AgentEvent::AgentEnd { .. } => {
-                    eprintln!();
+            } else {
+                match event {
+                    AgentEvent::MessageUpdate { event, .. } => {
+                        if let AssistantStreamEvent::TextDelta { delta, .. } = event {
+                            eprint!("{}", delta);
+                        }
+                    }
+                    AgentEvent::ToolExecutionStart {
+                        tool_name, args, ..
+                    } => {
+                        let args_summary = match serde_json::to_string(&args) {
+                            Ok(s) if s.len() > 200 => format!("{}...", &s[..200]),
+                            Ok(s) => s,
+                            Err(_) => String::new(),
+                        };
+                        eprintln!("\n[tool:{}] {}", tool_name, args_summary);
+                    }
+                    AgentEvent::ToolExecutionEnd {
+                        tool_name,
+                        is_error,
+                        ..
+                    } => {
+                        if is_error {
+                            eprintln!("[tool:{}] ERROR", tool_name);
+                        } else {
+                            eprintln!("[tool:{}] done", tool_name);
+                        }
+                    }
+                    AgentEvent::PostToolsHookStart { hook_name } => {
+                        eprintln!("[hook:{}] running...", hook_name);
+                    }
+                    AgentEvent::PostToolsHookEnd {
+                        hook_name,
+                        success,
+                        summary,
+                    } => {
+                        if success {
+                            eprintln!("[hook:{}] {}", hook_name, summary);
+                        } else {
+                            eprintln!("[hook:{}] FAILED: {}", hook_name, summary);
+                        }
+                        iteration_hook_results.push(HookSummary {
+                            name: hook_name,
+                            success,
+                            summary,
+                        });
+                    }
+                    AgentEvent::AgentEnd { .. } => {
+                        eprintln!();
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -319,6 +419,7 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
             let reason = std::fs::read_to_string(&stop_file).unwrap_or_default();
             let _ = std::fs::remove_file(&stop_file);
             eprintln!("[loop] Stopped after iteration: {}", reason.trim());
+            emit_json!({"type": "loop_stopped", "reason": reason.trim()});
             break;
         }
 
@@ -330,6 +431,8 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
             eprintln!("[loop] Running validation...");
             for cmd in &config.validation_commands {
                 eprintln!("[validate] $ {}", cmd);
+                emit_json!({"type": "validate_start", "command": cmd.clone()});
+
                 let output = tokio::process::Command::new("sh")
                     .arg("-c")
                     .arg(cmd)
@@ -349,6 +452,11 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
                             if !stderr.is_empty() {
                                 eprintln!("{}", stderr);
                             }
+                            emit_json!({
+                                "type": "validate_result",
+                                "command": cmd.clone(),
+                                "success": false
+                            });
                             validation_failed = true;
                             let mut details = format!("Command failed: {}\n", cmd);
                             if !stdout.is_empty() {
@@ -361,9 +469,19 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
                             break;
                         }
                         eprintln!("[validate] ok");
+                        emit_json!({
+                            "type": "validate_result",
+                            "command": cmd.clone(),
+                            "success": true
+                        });
                     }
                     Err(e) => {
                         eprintln!("[validate] Failed to run '{}': {}", cmd, e);
+                        emit_json!({
+                            "type": "validate_result",
+                            "command": cmd.clone(),
+                            "success": false
+                        });
                         validation_failed = true;
                         failure_details = Some(format!("Failed to execute '{}': {}", cmd, e));
                         break;
@@ -378,27 +496,39 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
         iter_ctx.last_commit = get_last_commit(&config.cwd);
         iter_ctx.hook_results = iteration_hook_results;
 
-        if let Some(err) = agent_error {
+        let outcome = if let Some(err) = agent_error {
             iter_ctx.last_outcome = IterationOutcome::AgentError;
             iter_ctx.failure_details = Some(err);
+            "error"
         } else if validation_failed {
             iter_ctx.last_outcome = IterationOutcome::ValidationFailed;
             iter_ctx.failure_details = failure_details;
+            "validation_failed"
         } else {
             iter_ctx.last_outcome = IterationOutcome::Success;
             iter_ctx.failure_details = None;
-        }
+            "success"
+        };
+
+        emit_json!({
+            "type": "iteration_end",
+            "iteration": iteration,
+            "outcome": outcome
+        });
 
         // Sleep between iterations
         if iteration < config.max_iterations {
+            let sleep_secs = config.sleep_between.as_secs();
             eprintln!(
                 "[loop] Sleeping {}s before next iteration...",
-                config.sleep_between.as_secs()
+                sleep_secs
             );
+            emit_json!({"type": "loop_sleep", "seconds": sleep_secs});
             tokio::select! {
                 _ = tokio::time::sleep(config.sleep_between) => {},
                 _ = cancel.cancelled() => {
                     eprintln!("[loop] Cancelled during sleep");
+                    emit_json!({"type": "loop_cancelled"});
                     break;
                 }
             }
@@ -406,6 +536,7 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
     }
 
     eprintln!("[loop] Done");
+    emit_json!({"type": "loop_done"});
     Ok(())
 }
 
