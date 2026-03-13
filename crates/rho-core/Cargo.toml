@@ -1,6 +1,6 @@
 [package]
 name = "rho-core"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Core types and agent loop for the rho AI coding agent"
 license = "MIT"
@@ -17,7 +17,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 dirs = "5"
 toml = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 sha2 = "0.10"
 base64 = "0.22"
 open = "5"

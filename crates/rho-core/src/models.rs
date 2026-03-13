@@ -98,6 +98,8 @@ impl ModelRegistry {
             }
         }
 
+        load_zen_models(&mut registry.models);
+
         registry
     }
 
@@ -163,6 +165,44 @@ impl ModelRegistry {
                 .as_deref()
                 .unwrap_or("appropriate API key env var")
         ))
+    }
+}
+
+/// Load Zen models into the registry (only if OPENCODE_ZEN_API_KEY is set).
+fn load_zen_models(models: &mut Vec<ModelConfig>) {
+    if std::env::var("OPENCODE_ZEN_API_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .is_none()
+    {
+        return;
+    }
+
+    let zen_ids = crate::zen::fetch_zen_models();
+    for model_id in zen_ids {
+        let registry_id = format!("zen-{}", model_id);
+        // Skip if user already defined this ID
+        if models.iter().any(|m| m.id == registry_id) {
+            continue;
+        }
+
+        let (provider, base_url) = if model_id.contains("claude") {
+            (ProviderType::Anthropic, "https://opencode.ai/zen".to_string())
+        } else {
+            (ProviderType::OpenAi, "https://opencode.ai/zen/v1".to_string())
+        };
+
+        models.push(ModelConfig {
+            id: registry_id,
+            provider,
+            model_id: model_id.clone(),
+            base_url,
+            api_key_env: Some("OPENCODE_ZEN_API_KEY".into()),
+            context_window: 200_000,
+            max_tokens: 16_384,
+            thinking: model_id.contains("opus"),
+            server_tools: None,
+        });
     }
 }
 

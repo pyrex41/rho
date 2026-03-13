@@ -250,6 +250,30 @@ fn resolve_model_config(
     registry: &ModelRegistry,
     thinking: ThinkingLevel,
 ) -> ModelConfig {
+    // OpenCode Zen: opencode/<model-id> → route to Zen gateway
+    if let Some(model_id) = model_arg.strip_prefix("opencode/") {
+        let (provider, base_url) = if model_id.contains("claude") {
+            (ProviderType::Anthropic, "https://opencode.ai/zen".into())
+        } else {
+            (ProviderType::OpenAi, "https://opencode.ai/zen/v1".into())
+        };
+        return ModelConfig {
+            id: model_arg.to_string(),
+            provider,
+            model_id: model_id.to_string(),
+            base_url,
+            api_key_env: Some("OPENCODE_ZEN_API_KEY".into()),
+            context_window: 200_000,
+            max_tokens: if thinking != ThinkingLevel::Off {
+                16_384
+            } else {
+                8_192
+            },
+            thinking: model_id.contains("opus") || thinking != ThinkingLevel::Off,
+            server_tools: None,
+        };
+    }
+
     // Try exact match first
     if let Some(config) = registry.get(model_arg) {
         return config.clone();

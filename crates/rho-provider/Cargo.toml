@@ -1,13 +1,13 @@
 [package]
 name = "rho-provider"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "LLM provider implementations for rho (Anthropic, OpenAI)"
 license = "MIT"
 repository = "https://github.com/pyrex41/rho"
 
 [dependencies]
-rho-core = { version = "0.4.0", path = "../rho-core" }
+rho-core = { version = "0.4.1", path = "../rho-core" }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

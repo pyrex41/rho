@@ -14,3 +14,4 @@ pub mod provider_types;
 pub mod skills;
 pub mod tool;
 pub mod types;
+pub mod zen;
