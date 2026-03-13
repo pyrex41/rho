@@ -24,14 +24,13 @@ esac
 
 info "Detected: ${OS} ${ARCH}"
 
-# Determine asset name pattern
-if [ "$OS" = "macos" ]; then
-    TARGET="${ARCH}-apple-darwin"
-elif [ "$OS" = "linux" ]; then
-    TARGET="${ARCH}-unknown-linux-gnu"
-fi
+# Determine asset name pattern (must match CI asset names)
+case "$(uname -m)" in
+    x86_64|amd64) ARCH_LABEL="x64" ;;
+    aarch64|arm64) ARCH_LABEL="arm64" ;;
+esac
 
-ASSET_PATTERN="rho-cli-${TARGET}"
+ASSET_PATTERN="rho-cli-${OS}-${ARCH_LABEL}"
 
 # Get latest release tag
 info "Fetching latest release..."
