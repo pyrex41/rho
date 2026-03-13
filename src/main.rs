@@ -208,7 +208,11 @@ For example, if asked about 'latest trending repos', search for 'trending github
 - After searching, use web_fetch on the most promising URLs to get detailed information.
 - Always cite your sources with URLs in your response.";
 
-fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>) -> Vec<Arc<dyn AgentTool>> {
+fn build_tools(
+    cwd: &PathBuf,
+    allowed: &Option<Vec<String>>,
+    agent_config: &rho_core::config::ProjectConfig,
+) -> Vec<Arc<dyn AgentTool>> {
     let all_tools: Vec<Arc<dyn AgentTool>> = vec![
         Arc::new(rho_tools::read::ReadTool::with_cwd(cwd.clone())),
         Arc::new(rho_tools::write::WriteTool::with_cwd(cwd.clone())),
@@ -216,7 +220,11 @@ fn build_tools(cwd: &PathBuf, allowed: &Option<Vec<String>>) -> Vec<Arc<dyn Agen
         Arc::new(rho_tools::bash::BashTool::new(cwd.clone())),
         Arc::new(rho_tools::grep::GrepTool::new(cwd.clone())),
         Arc::new(rho_tools::find::FindTool::new(cwd.clone())),
-        Arc::new(rho_tools::task::TaskTool::new(cwd.clone())),
+        Arc::new(rho_tools::task::TaskTool::new(
+            cwd.clone(),
+            agent_config.max_agent_depth,
+            agent_config.agents.clone(),
+        )),
         Arc::new(rho_tools::web_fetch::WebFetchTool::new()),
         Arc::new(rho_tools::web_search::WebSearchTool::new()),
     ];
@@ -694,12 +702,13 @@ async fn main() -> Result<()> {
 
             let allowed_tools = project_config.allowed_tools.clone();
             let cwd_for_tools = cwd.clone();
+            let project_config_for_tools = project_config.clone();
 
             let server_config = rho_server::ServerConfig {
                 model_config,
                 api_key: resolved_api_key,
                 system_prompt: build_system_prompt(&cwd, &project_config, None),
-                tools_factory: Arc::new(move || build_tools(&cwd_for_tools, &allowed_tools)),
+                tools_factory: Arc::new(move || build_tools(&cwd_for_tools, &allowed_tools, &project_config_for_tools)),
                 thinking: thinking_level,
                 bearer_token,
                 compact_threshold: project_config.compact_threshold,
@@ -761,7 +770,7 @@ async fn main() -> Result<()> {
                 } else {
                     project_config.allowed_tools.clone()
                 };
-            let tools = build_tools(&cwd, &default_tools);
+            let tools = build_tools(&cwd, &default_tools, &project_config);
             let system_prompt = build_system_prompt(&cwd, &project_config, None);
 
             let cancel = CancellationToken::new();
@@ -846,7 +855,7 @@ async fn main() -> Result<()> {
 
             // Merge tool restrictions: CLI flag overrides config
             let allowed_tools = cli.tools.or(project_config.allowed_tools.clone());
-            let tools = build_tools(&cwd, &allowed_tools);
+            let tools = build_tools(&cwd, &allowed_tools, &project_config);
 
             let system_prompt =
                 build_system_prompt(&cwd, &project_config, cli.system_append.as_deref());

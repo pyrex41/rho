@@ -287,7 +287,7 @@ impl RhoApp {
             (Arc::new(rho_tools::bash::BashTool::new(cwd.clone())), true),
             (Arc::new(rho_tools::grep::GrepTool::new(cwd.clone())), true),
             (Arc::new(rho_tools::find::FindTool::new(cwd.clone())), true),
-            (Arc::new(rho_tools::task::TaskTool::new(cwd.clone())), true),
+            (Arc::new(rho_tools::task::TaskTool::new(cwd.clone(), project_config.max_agent_depth, project_config.agents.clone())), true),
             (Arc::new(rho_tools::web_fetch::WebFetchTool::with_claude_proxy(claude_proxy.clone())), true),
             (Arc::new(rho_tools::web_search::WebSearchTool::with_claude_proxy(claude_proxy.clone())), true),
         ];

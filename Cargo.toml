@@ -11,7 +11,7 @@ resolver = "2"
 
 [package]
 name = "rho-agent"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 description = "AI coding agent with file tools"
 license = "MIT"
@@ -22,10 +22,10 @@ name = "rho-cli"
 path = "src/main.rs"
 
 [dependencies]
-rho-core = { version = "0.3.1", path = "crates/rho-core" }
-rho-provider = { version = "0.3.1", path = "crates/rho-provider" }
-rho-tools = { version = "0.3.1", path = "crates/rho-tools" }
-rho-server = { version = "0.3.1", path = "crates/rho-server" }
+rho-core = { version = "0.4.0", path = "crates/rho-core" }
+rho-provider = { version = "0.4.0", path = "crates/rho-provider" }
+rho-tools = { version = "0.4.0", path = "crates/rho-tools" }
+rho-server = { version = "0.4.0", path = "crates/rho-server" }
 tokio = { workspace = true }
 clap = { workspace = true }
 futures = { workspace = true }

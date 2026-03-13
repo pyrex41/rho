@@ -3,16 +3,22 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use rho_core::config::AgentDef;
 use rho_core::tool::{AgentTool, ToolError};
 use rho_core::types::{Content, ToolResult};
+
+const DEFAULT_MAX_AGENT_DEPTH: usize = 5;
 
 pub struct TaskTool {
     rho_binary: PathBuf,
     cwd: PathBuf,
+    max_depth: usize,
+    current_depth: usize,
+    allowed_agents: Option<Vec<AgentDef>>,
 }
 
 impl TaskTool {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub fn new(cwd: PathBuf, max_depth: Option<usize>, allowed_agents: Vec<AgentDef>) -> Self {
         // Find the rho binary — prefer the one next to current exe
         let rho_binary = std::env::current_exe()
             .ok()
@@ -27,7 +33,24 @@ impl TaskTool {
             })
             .unwrap_or_else(|| PathBuf::from("rho"));
 
-        Self { rho_binary, cwd }
+        let current_depth: usize = std::env::var("RHO_AGENT_DEPTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+
+        let allowed_agents = if allowed_agents.is_empty() {
+            None
+        } else {
+            Some(allowed_agents)
+        };
+
+        Self {
+            rho_binary,
+            cwd,
+            max_depth: max_depth.unwrap_or(DEFAULT_MAX_AGENT_DEPTH),
+            current_depth,
+            allowed_agents,
+        }
     }
 }
 
@@ -42,13 +65,36 @@ impl AgentTool for TaskTool {
     }
 
     fn description(&self) -> String {
-        "Launch a subagent to handle a task. The subagent runs as a separate process with \
+        let mut desc = "Launch a subagent to handle a task. The subagent runs as a separate process with \
          its own context. Use this for research, analysis, or delegating work that should \
-         not pollute the current conversation context."
-            .into()
+         not pollute the current conversation context.".to_string();
+        if let Some(ref agents) = self.allowed_agents {
+            desc.push_str("\n\nAvailable agents:");
+            for a in agents {
+                desc.push_str(&format!("\n- {}", a.name));
+                if let Some(ref d) = a.description {
+                    desc.push_str(&format!(": {}", d));
+                }
+            }
+        }
+        desc
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
+        let agent_prop = if let Some(ref agents) = self.allowed_agents {
+            let names: Vec<String> = agents.iter().map(|a| a.name.clone()).collect();
+            serde_json::json!({
+                "type": "string",
+                "description": "Agent to use for this task",
+                "enum": names
+            })
+        } else {
+            serde_json::json!({
+                "type": "string",
+                "description": "Name of agent config from .rho/agents/ (optional)"
+            })
+        };
+
         serde_json::json!({
             "type": "object",
             "required": ["prompt"],
@@ -57,10 +103,7 @@ impl AgentTool for TaskTool {
                     "type": "string",
                     "description": "The task prompt for the subagent"
                 },
-                "agent": {
-                    "type": "string",
-                    "description": "Name of agent config from .rho/agents/ (optional)"
-                },
+                "agent": agent_prop,
                 "tools": {
                     "type": "string",
                     "description": "Comma-separated list of allowed tools (e.g. 'read,grep,find')"
@@ -75,6 +118,19 @@ impl AgentTool for TaskTool {
         params: serde_json::Value,
         cancel: CancellationToken,
     ) -> Result<ToolResult, ToolError> {
+        // Depth limit check
+        if self.current_depth >= self.max_depth {
+            return Ok(ToolResult {
+                content: vec![Content::Text {
+                    text: format!(
+                        "Subagent depth limit reached ({}/{}). Cannot spawn further subagents.",
+                        self.current_depth, self.max_depth
+                    ),
+                }],
+                details: serde_json::json!({"error": "depth_limit"}),
+            });
+        }
+
         let prompt = params["prompt"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidParameters("prompt is required".into()))?;
@@ -82,7 +138,32 @@ impl AgentTool for TaskTool {
         let agent_name = params["agent"].as_str();
         let tools_override = params["tools"].as_str();
 
-        // Load agent config if specified
+        // Agent allowlist check
+        let matched_agent_def = if let Some(ref allowed) = self.allowed_agents {
+            if let Some(name) = agent_name {
+                let found = allowed.iter().find(|a| a.name == name);
+                if found.is_none() {
+                    let available: Vec<&str> = allowed.iter().map(|a| a.name.as_str()).collect();
+                    return Ok(ToolResult {
+                        content: vec![Content::Text {
+                            text: format!(
+                                "Agent '{}' is not in the allowed agents list. Available agents: {}",
+                                name,
+                                available.join(", ")
+                            ),
+                        }],
+                        details: serde_json::json!({"error": "agent_not_allowed"}),
+                    });
+                }
+                found
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Load agent config file if specified (file-based config)
         let agent_config = if let Some(name) = agent_name {
             load_agent_config(&self.cwd, name)
         } else {
@@ -92,9 +173,17 @@ impl AgentTool for TaskTool {
         let mut cmd = tokio::process::Command::new(&self.rho_binary);
         cmd.current_dir(&self.cwd);
 
+        // Set depth env for child process
+        cmd.env("RHO_AGENT_DEPTH", (self.current_depth + 1).to_string());
+
         // Apply tools restriction
+        // Priority: explicit tools param > AgentDef from RHO.md > agent config file
         if let Some(tools) = tools_override {
             cmd.arg("--tools").arg(tools);
+        } else if let Some(agent_def) = matched_agent_def {
+            if let Some(ref tools) = agent_def.tools {
+                cmd.arg("--tools").arg(tools);
+            }
         } else if let Some(ref ac) = agent_config {
             if let Some(ref tools) = ac.tools {
                 cmd.arg("--tools").arg(tools);
@@ -102,13 +191,18 @@ impl AgentTool for TaskTool {
         }
 
         // Apply model override
-        if let Some(ref ac) = agent_config {
+        // Priority: AgentDef from RHO.md > agent config file
+        if let Some(agent_def) = matched_agent_def {
+            if let Some(ref model) = agent_def.model {
+                cmd.arg("--model").arg(model);
+            }
+        } else if let Some(ref ac) = agent_config {
             if let Some(ref model) = ac.model {
                 cmd.arg("--model").arg(model);
             }
         }
 
-        // Apply system prompt append
+        // Apply system prompt append (only from agent config file)
         if let Some(ref ac) = agent_config {
             if let Some(ref append) = ac.system_prompt_append {
                 cmd.arg("--system-append").arg(append);
@@ -270,11 +364,89 @@ Do not modify any files.";
     }
 
     #[test]
-    fn task_tool_schema() {
-        let tool = TaskTool::new(PathBuf::from("."));
+    fn task_tool_schema_no_agents() {
+        let tool = TaskTool::new(PathBuf::from("."), None, vec![]);
         let schema = tool.parameters_schema();
         assert_eq!(schema["required"][0], "prompt");
         assert!(schema["properties"]["agent"].is_object());
+        assert!(schema["properties"]["agent"]["enum"].is_null());
         assert!(schema["properties"]["tools"].is_object());
+    }
+
+    #[test]
+    fn task_tool_schema_with_agents() {
+        let agents = vec![
+            AgentDef {
+                name: "researcher".into(),
+                tools: Some("read,grep".into()),
+                model: None,
+                description: Some("Research agent".into()),
+            },
+            AgentDef {
+                name: "coder".into(),
+                tools: None,
+                model: Some("claude-opus".into()),
+                description: None,
+            },
+        ];
+        let tool = TaskTool::new(PathBuf::from("."), None, agents);
+        let schema = tool.parameters_schema();
+        let agent_enum = &schema["properties"]["agent"]["enum"];
+        assert_eq!(agent_enum[0], "researcher");
+        assert_eq!(agent_enum[1], "coder");
+    }
+
+    #[test]
+    fn task_tool_description_lists_agents() {
+        let agents = vec![AgentDef {
+            name: "researcher".into(),
+            tools: None,
+            model: None,
+            description: Some("Finds stuff".into()),
+        }];
+        let tool = TaskTool::new(PathBuf::from("."), None, agents);
+        let desc = tool.description();
+        assert!(desc.contains("Available agents:"));
+        assert!(desc.contains("- researcher: Finds stuff"));
+    }
+
+    #[tokio::test]
+    async fn task_tool_depth_limit() {
+        // Simulate being at max depth
+        std::env::set_var("RHO_AGENT_DEPTH", "5");
+        let tool = TaskTool::new(PathBuf::from("."), Some(5), vec![]);
+        let cancel = CancellationToken::new();
+        let params = serde_json::json!({"prompt": "do something"});
+        let result = tool.execute("test", params, cancel).await.unwrap();
+        let text = match &result.content[0] {
+            Content::Text { text } => text.as_str(),
+            _ => panic!("expected text"),
+        };
+        assert!(text.contains("depth limit reached"));
+        assert_eq!(result.details["error"], "depth_limit");
+        // Clean up
+        std::env::remove_var("RHO_AGENT_DEPTH");
+    }
+
+    #[tokio::test]
+    async fn task_tool_agent_not_allowed() {
+        std::env::remove_var("RHO_AGENT_DEPTH");
+        let agents = vec![AgentDef {
+            name: "researcher".into(),
+            tools: None,
+            model: None,
+            description: None,
+        }];
+        let tool = TaskTool::new(PathBuf::from("."), None, agents);
+        let cancel = CancellationToken::new();
+        let params = serde_json::json!({"prompt": "do something", "agent": "hacker"});
+        let result = tool.execute("test", params, cancel).await.unwrap();
+        let text = match &result.content[0] {
+            Content::Text { text } => text.as_str(),
+            _ => panic!("expected text"),
+        };
+        assert!(text.contains("not in the allowed agents list"));
+        assert!(text.contains("researcher"));
+        assert_eq!(result.details["error"], "agent_not_allowed");
     }
 }

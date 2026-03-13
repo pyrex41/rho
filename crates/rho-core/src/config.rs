@@ -4,6 +4,14 @@ use crate::hooks::HookConfig;
 use crate::types::ThinkingLevel;
 
 #[derive(Debug, Clone)]
+pub struct AgentDef {
+    pub name: String,
+    pub tools: Option<String>,
+    pub model: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ProjectConfig {
     pub model: Option<String>,
     pub thinking: Option<ThinkingLevel>,
@@ -15,6 +23,8 @@ pub struct ProjectConfig {
     pub memories: bool,
     pub source: Option<PathBuf>,
     pub post_tools_hooks: Vec<HookConfig>,
+    pub agents: Vec<AgentDef>,
+    pub max_agent_depth: Option<usize>,
 }
 
 impl Default for ProjectConfig {
@@ -30,6 +40,8 @@ impl Default for ProjectConfig {
             memories: true,
             source: None,
             post_tools_hooks: Vec::new(),
+            agents: Vec::new(),
+            max_agent_depth: None,
         }
     }
 }
@@ -112,9 +124,57 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
     let mut in_hooks = false;
     let mut current_hook: Option<HookConfig> = None;
     let mut hooks: Vec<HookConfig> = Vec::new();
+    // State for parsing agents (nested YAML objects in a list)
+    let mut in_agents = false;
+    let mut current_agent: Option<AgentDef> = None;
+    let mut agents: Vec<AgentDef> = Vec::new();
 
     for line in frontmatter.lines() {
         let trimmed_line = line.trim();
+
+        // Handle agents parsing
+        if in_agents {
+            if trimmed_line.starts_with("- ") {
+                // New agent entry — finalize previous one
+                if let Some(agent) = current_agent.take() {
+                    agents.push(agent);
+                }
+                let rest = trimmed_line.strip_prefix("- ").unwrap().trim();
+                let mut agent = AgentDef {
+                    name: String::new(),
+                    tools: None,
+                    model: None,
+                    description: None,
+                };
+                if let Some((k, v)) = rest.split_once(':') {
+                    let k = k.trim();
+                    let v = v.trim();
+                    apply_agent_field(&mut agent, k, v);
+                }
+                current_agent = Some(agent);
+                continue;
+            } else if trimmed_line.is_empty() {
+                continue;
+            } else if line.starts_with("    ") || line.starts_with("\t\t") || line.starts_with("  ") {
+                // Indented line within an agent block
+                if let Some(ref mut agent) = current_agent {
+                    if let Some((k, v)) = trimmed_line.split_once(':') {
+                        let k = k.trim();
+                        let v = v.trim();
+                        apply_agent_field(agent, k, v);
+                    }
+                }
+                continue;
+            } else {
+                // End of agents section
+                if let Some(agent) = current_agent.take() {
+                    agents.push(agent);
+                }
+                config.agents = std::mem::take(&mut agents);
+                in_agents = false;
+                // Fall through to normal parsing for this line
+            }
+        }
 
         // Handle post_tools_hooks parsing
         if in_hooks {
@@ -156,7 +216,7 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                 if let Some(hook) = current_hook.take() {
                     hooks.push(hook);
                 }
-                config.post_tools_hooks = hooks.drain(..).collect();
+                config.post_tools_hooks = std::mem::take(&mut hooks);
                 in_hooks = false;
                 // Fall through to normal parsing for this line
             }
@@ -184,6 +244,10 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                     in_hooks = true;
                     continue;
                 }
+                if key == "agents" {
+                    in_agents = true;
+                    continue;
+                }
                 // Could be start of a list
                 in_list = Some(key.to_string());
                 continue;
@@ -199,6 +263,11 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                 }
                 "memories" => {
                     config.memories = value != "false";
+                }
+                "max_agent_depth" => {
+                    if let Ok(v) = value.parse::<usize>() {
+                        config.max_agent_depth = Some(v);
+                    }
                 }
                 "allowed_tools" => {
                     // Inline comma-separated list
@@ -224,7 +293,25 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
         config.post_tools_hooks = hooks;
     }
 
+    // Flush any trailing agents
+    if in_agents {
+        if let Some(agent) = current_agent.take() {
+            agents.push(agent);
+        }
+        config.agents = agents;
+    }
+
     config
+}
+
+fn apply_agent_field(agent: &mut AgentDef, key: &str, value: &str) {
+    match key {
+        "name" => agent.name = value.to_string(),
+        "tools" => agent.tools = Some(value.to_string()),
+        "model" => agent.model = Some(value.to_string()),
+        "description" => agent.description = Some(value.to_string()),
+        _ => {}
+    }
 }
 
 fn apply_hook_field(hook: &mut HookConfig, key: &str, value: &str) {
@@ -327,6 +414,58 @@ This is a Rust workspace. Always run `cargo test` after changes.
         let config = parse_rho_md(content, PathBuf::from("RHO.md"));
         let tools = config.allowed_tools.unwrap();
         assert_eq!(tools, vec!["read", "grep", "find"]);
+    }
+
+    #[test]
+    fn parse_rho_md_agents_block() {
+        let content = "\
+---
+max_agent_depth: 3
+agents:
+  - name: researcher
+    tools: read,grep,find
+    model: claude-haiku
+    description: Research agent for code analysis
+  - name: test-runner
+    tools: bash,read
+    description: Runs tests and reports results
+---
+
+# Instructions
+";
+        let config = parse_rho_md(content, PathBuf::from("RHO.md"));
+        assert_eq!(config.max_agent_depth, Some(3));
+        assert_eq!(config.agents.len(), 2);
+
+        assert_eq!(config.agents[0].name, "researcher");
+        assert_eq!(config.agents[0].tools.as_deref(), Some("read,grep,find"));
+        assert_eq!(config.agents[0].model.as_deref(), Some("claude-haiku"));
+        assert_eq!(
+            config.agents[0].description.as_deref(),
+            Some("Research agent for code analysis")
+        );
+
+        assert_eq!(config.agents[1].name, "test-runner");
+        assert_eq!(config.agents[1].tools.as_deref(), Some("bash,read"));
+        assert!(config.agents[1].model.is_none());
+        assert_eq!(
+            config.agents[1].description.as_deref(),
+            Some("Runs tests and reports results")
+        );
+    }
+
+    #[test]
+    fn parse_rho_md_no_agents_backwards_compat() {
+        let content = "\
+---
+model: claude-sonnet
+---
+
+# Instructions
+";
+        let config = parse_rho_md(content, PathBuf::from("RHO.md"));
+        assert!(config.agents.is_empty());
+        assert!(config.max_agent_depth.is_none());
     }
 
     #[test]
