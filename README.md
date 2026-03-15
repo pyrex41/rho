@@ -9,6 +9,7 @@ A fast, extensible AI coding agent built in Rust. Rho gives an LLM a set of deve
 - **LINE:HASH editing** — Hash-based line anchoring for precise, resilient file edits
 - **Session persistence** — SQLite-backed sessions with full history and resume support
 - **Autonomous loop** — Plan and build modes for hands-off multi-step execution
+- **Autoresearch** — Autonomous optimization loop: iteratively improve a metric via code changes, benchmarking, and git
 - **Extended thinking** — First-class support for reasoning models (Claude Opus, Grok reasoning)
 - **Project config** — Per-project settings via `RHO.md` or `CLAUDE.md` with YAML frontmatter
 - **Post-tool hooks** — Run validation commands (tests, lints) automatically after tool use
@@ -64,6 +65,7 @@ rho-cli --resume <session-id>
 ```
 rho-cli [OPTIONS] [PROMPT]
 rho-cli loop [OPTIONS]
+rho-cli autoresearch --benchmark <CMD> --metric <NAME> [OPTIONS]
 ```
 
 ### Options
@@ -93,6 +95,62 @@ rho-cli loop --mode plan
 # Custom plan file, more iterations
 rho-cli loop --plan my-plan.md --max-iterations 100
 ```
+
+### Autoresearch
+
+An autonomous optimization loop inspired by [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch). The agent iteratively makes code changes to improve a measurable metric — the runner benchmarks, commits improvements, reverts regressions, and persists state for resumability.
+
+```bash
+# Optimize a benchmark metric (lower is better by default)
+rho-cli autoresearch \
+  --benchmark "cargo bench --bench parse" \
+  --metric latency_ns \
+  --metric-regex "latency_ns\s+(\d+)" \
+  --direction lower
+
+# Maximize a score, with correctness checks before benchmarking
+rho-cli autoresearch \
+  --benchmark "./bench.sh" \
+  --metric score \
+  --metric-regex "score:\s*(\d+\.?\d*)" \
+  --direction higher \
+  --checks "cargo test" \
+  --max-iterations 20
+
+# Use wall-clock time as the metric (omit --metric-regex)
+rho-cli autoresearch \
+  --benchmark "cargo build --release" \
+  --metric build_time \
+  --direction lower
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--benchmark <CMD>` | Command to measure the metric (required) | |
+| `--metric <NAME>` | Name of the metric being optimized (required) | |
+| `--direction <DIR>` | `lower` or `higher` | `lower` |
+| `--metric-regex <RE>` | Regex with capture group to extract metric from output | wall-clock time |
+| `--checks <CMD>` | Correctness check (tests/lint) run before benchmarking | |
+| `--max-iterations <N>` | Maximum optimization iterations | `50` |
+| `--sleep <SECS>` | Seconds between iterations | `5` |
+| `--objective <TEXT>` | Description of the optimization goal | |
+| `--benchmark-timeout <SECS>` | Kill benchmark after this many seconds | `300` |
+| `--output-format <FMT>` | `text` or `stream-json` | `text` |
+
+**How it works:**
+
+1. Runs a baseline benchmark to capture the starting metric value
+2. Each iteration: the agent analyzes experiment history, hypothesizes an optimization, and implements one focused code change
+3. The runner validates changes (optional `--checks`), then benchmarks
+4. If the metric improved: changes are committed. If it regressed: changes are reverted
+5. State is persisted in `autoresearch.jsonl` (structured log) and `autoresearch.md` (session document with strategy notes)
+6. Resumable — kill and restart anytime; it picks up from the JSONL log
+7. The agent can write `EXHAUSTED` to `.stop` when no more optimizations are viable
+
+**Output files:**
+
+- `autoresearch.jsonl` — One JSON object per experiment (iteration, metric value, status, commit hash)
+- `autoresearch.md` — Human-readable session document with config, best result, history table, and agent strategy notes
 
 ## Built-in tools
 
@@ -178,7 +236,8 @@ crates/
 └── rho-gui         # GUI frontend (iced, in development)
 src/
 ├── main.rs         # CLI entry point
-└── loop_runner.rs  # Autonomous loop logic
+├── loop_runner.rs  # Autonomous loop logic
+└── autoresearch.rs # Autoresearch optimization loop
 ```
 
 ## License
