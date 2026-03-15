@@ -16,6 +16,7 @@ use rho_core::tool::AgentTool;
 use rho_core::types::*;
 use rho_core::session::SessionStore;
 
+mod autoresearch;
 mod loop_runner;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -147,6 +148,65 @@ enum Commands {
         /// Seconds to sleep between iterations
         #[arg(long, default_value_t = 5)]
         sleep: u64,
+
+        /// Model ID override
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Thinking level override
+        #[arg(long)]
+        thinking: Option<String>,
+
+        /// Override API key
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// Working directory
+        #[arg(short = 'C', long)]
+        directory: Option<PathBuf>,
+
+        /// Output format: text or stream-json
+        #[arg(long, default_value = "text")]
+        output_format: String,
+    },
+    /// Run autonomous optimization loop
+    Autoresearch {
+        /// Benchmark command to measure the metric
+        #[arg(long)]
+        benchmark: String,
+
+        /// Name of the metric being optimized
+        #[arg(long)]
+        metric: String,
+
+        /// Optimization direction: "lower" or "higher"
+        #[arg(long, default_value = "lower")]
+        direction: String,
+
+        /// Regex to extract metric from benchmark stdout (first capture group).
+        /// If omitted, wall-clock time of benchmark is used as the metric.
+        #[arg(long)]
+        metric_regex: Option<String>,
+
+        /// Correctness check command (tests/lint), run before benchmarking
+        #[arg(long)]
+        checks: Option<String>,
+
+        /// Maximum iterations
+        #[arg(long, default_value_t = 50)]
+        max_iterations: usize,
+
+        /// Seconds between iterations
+        #[arg(long, default_value_t = 5)]
+        sleep: u64,
+
+        /// Optimization objective description
+        #[arg(long)]
+        objective: Option<String>,
+
+        /// Benchmark timeout in seconds
+        #[arg(long, default_value_t = 300)]
+        benchmark_timeout: u64,
 
         /// Model ID override
         #[arg(long)]
@@ -841,6 +901,118 @@ async fn main() -> Result<()> {
             };
 
             loop_runner::run_loop(loop_config, cancel).await?;
+        }
+        Some(Commands::Autoresearch {
+            benchmark,
+            metric,
+            direction,
+            metric_regex,
+            checks,
+            max_iterations,
+            sleep,
+            objective,
+            benchmark_timeout,
+            model,
+            thinking,
+            api_key,
+            directory,
+            output_format,
+        }) => {
+            let cwd = match directory {
+                Some(dir) => std::fs::canonicalize(&dir)
+                    .with_context(|| format!("Invalid directory: {}", dir.display()))?,
+                None => std::env::current_dir().context("Failed to get current directory")?,
+            };
+
+            let project_config = load_project_config(&cwd);
+
+            let model_id = model
+                .or(project_config.model.clone())
+                .unwrap_or_else(|| "claude-sonnet".into());
+            let thinking_str = thinking.unwrap_or_else(|| {
+                project_config
+                    .thinking
+                    .map(|t| format!("{:?}", t).to_lowercase())
+                    .unwrap_or_else(|| "off".into())
+            });
+            let thinking_level = parse_thinking(&thinking_str);
+
+            let registry = ModelRegistry::load();
+            let model_config = resolve_model_config(&model_id, &registry, thinking_level);
+
+            let api_key = match api_key {
+                Some(key) => key,
+                None => {
+                    ModelRegistry::resolve_api_key(&model_config).map_err(|e| anyhow::anyhow!(e))?
+                }
+            };
+
+            let model = ModelRegistry::to_model(&model_config);
+            let tools = build_tools(&cwd, &project_config.allowed_tools, &project_config);
+
+            let autoresearch_system_append = "\n\n## Autoresearch Mode\n\
+                You are in autoresearch mode -- an autonomous optimization loop.\n\
+                Your goal: improve a measurable metric through iterative code changes.\n\n\
+                Rules:\n\
+                - Do NOT run git commit, git add, git push, or any git write operations\n\
+                - Do NOT run the benchmark command yourself\n\
+                - Implement ONE targeted change per iteration\n\
+                - Update autoresearch.md with your strategy notes\n\
+                - If all viable optimizations are exhausted, write \"EXHAUSTED\" to .stop";
+
+            let system_prompt = build_system_prompt(&cwd, &project_config, Some(autoresearch_system_append));
+
+            let cancel = CancellationToken::new();
+            let cancel_clone = cancel.clone();
+            tokio::spawn(async move {
+                tokio::signal::ctrl_c().await.ok();
+                eprintln!("\nInterrupted, cancelling...");
+                cancel_clone.cancel();
+            });
+
+            let post_tools_hooks: Vec<Arc<dyn rho_core::hooks::PostToolsHook>> = project_config
+                .post_tools_hooks
+                .iter()
+                .map(|h| -> Arc<dyn rho_core::hooks::PostToolsHook> {
+                    Arc::new(rho_core::hooks::ShellCommandHook {
+                        config: h.clone(),
+                        cwd: cwd.clone(),
+                    })
+                })
+                .collect();
+
+            let compiled_regex = match metric_regex {
+                Some(ref pattern) => Some(
+                    regex::Regex::new(pattern)
+                        .with_context(|| format!("Invalid metric regex: {}", pattern))?,
+                ),
+                None => None,
+            };
+
+            let output_format = OutputFormat::parse(&output_format);
+
+            let ar_config = autoresearch::AutoresearchConfig {
+                benchmark_command: benchmark,
+                metric_name: metric,
+                direction: autoresearch::MetricDirection::from_str(&direction),
+                metric_regex: compiled_regex,
+                checks_command: checks,
+                max_iterations,
+                sleep_between: Duration::from_secs(sleep),
+                objective,
+                benchmark_timeout: Duration::from_secs(benchmark_timeout),
+                model,
+                api_key,
+                system_prompt,
+                tools,
+                thinking: thinking_level,
+                cwd,
+                stream_fn: rho_provider::stream_fn_for_model(&model_config),
+                post_tools_hooks,
+                output_format,
+            };
+
+            autoresearch::run_autoresearch(ar_config, cancel).await?;
         }
         None => {
             // Single-shot mode
