@@ -6,5 +6,6 @@ pub mod grep;
 pub mod find;
 pub mod edit;
 pub mod task;
+pub mod tool_search;
 pub mod web_fetch;
 pub mod web_search;

@@ -175,11 +175,20 @@ fn convert_tool_result(tool_call_id: &str, content: &[Content], is_error: bool) 
 }
 
 fn convert_tool_def(tool: &ToolDef) -> Value {
-    json!({
-        "name": tool.name,
-        "description": tool.description,
-        "input_schema": tool.parameters,
-    })
+    if tool.deferred {
+        // Deferred tools: send minimal info. Model must use ToolSearch to get full schema.
+        json!({
+            "name": tool.name,
+            "description": "",
+            "input_schema": {"type": "object", "properties": {}},
+        })
+    } else {
+        json!({
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.parameters,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -274,6 +283,7 @@ mod tests {
                     },
                     "required": ["path"]
                 }),
+                deferred: false,
             }],
         };
         let options = StreamOptions {

@@ -1,3 +1,5 @@
+pub mod memory;
+
 use std::path::Path;
 use std::sync::Mutex;
 

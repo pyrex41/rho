@@ -215,7 +215,7 @@ async fn send_message(
     let tools = (config.tools_factory)();
     let transform_messages = config
         .compact_threshold
-        .map(compaction::make_compaction_transform);
+        .map(|t| compaction::make_compaction_transform(t, None));
 
     let loop_config = AgentLoopConfig {
         model,
@@ -229,6 +229,9 @@ async fn send_message(
         get_follow_up_messages: None,
         transform_messages,
         post_tools_hooks: Vec::new(),
+        pre_tool_hooks: vec![],
+        lifecycle_hooks: vec![],
+        shared_messages: None,
     };
 
     let mut consumer = agent_loop(messages, loop_config, cancel);

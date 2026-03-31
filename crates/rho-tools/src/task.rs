@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
@@ -15,6 +16,9 @@ pub struct TaskTool {
     max_depth: usize,
     current_depth: usize,
     allowed_agents: Option<Vec<AgentDef>>,
+    /// Shared reference to parent's message history for cache-optimized forking.
+    context_messages: Option<Arc<tokio::sync::RwLock<Vec<rho_core::types::Message>>>>,
+    cache_sharing_enabled: bool,
 }
 
 impl TaskTool {
@@ -50,7 +54,19 @@ impl TaskTool {
             max_depth: max_depth.unwrap_or(DEFAULT_MAX_AGENT_DEPTH),
             current_depth,
             allowed_agents,
+            context_messages: None,
+            cache_sharing_enabled: false,
         }
+    }
+
+    /// Enable cache sharing with a shared reference to the parent's message history.
+    pub fn with_cache_sharing(
+        mut self,
+        messages: Arc<tokio::sync::RwLock<Vec<rho_core::types::Message>>>,
+    ) -> Self {
+        self.context_messages = Some(messages);
+        self.cache_sharing_enabled = true;
+        self
     }
 }
 
@@ -170,11 +186,50 @@ impl AgentTool for TaskTool {
             None
         };
 
+        // Cache sharing: serialize parent context to temp file
+        let context_file_path = if self.cache_sharing_enabled {
+            if let Some(ref ctx) = self.context_messages {
+                let messages = ctx.read().await;
+                if !messages.is_empty() {
+                    let json = serde_json::to_string(&*messages).ok();
+                    if let Some(ref json_str) = json {
+                        // Skip if too large (>2MB)
+                        if json_str.len() <= 2 * 1024 * 1024 {
+                            let path = std::env::temp_dir().join(format!(
+                                "rho-context-{}.json",
+                                uuid::Uuid::new_v4()
+                            ));
+                            if tokio::fs::write(&path, json_str).await.is_ok() {
+                                Some(path)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let mut cmd = tokio::process::Command::new(&self.rho_binary);
         cmd.current_dir(&self.cwd);
 
         // Set depth env for child process
         cmd.env("RHO_AGENT_DEPTH", (self.current_depth + 1).to_string());
+
+        // Pass context file for cache sharing
+        if let Some(ref path) = context_file_path {
+            cmd.arg("--context-file").arg(path);
+        }
 
         // Apply tools restriction
         // Priority: explicit tools param > AgentDef from RHO.md > agent config file
@@ -247,6 +302,11 @@ impl AgentTool for TaskTool {
         if result_text.len() > 20_000 {
             result_text.truncate(20_000);
             result_text.push_str("\n... [truncated]");
+        }
+
+        // Cleanup context file
+        if let Some(ref path) = context_file_path {
+            let _ = tokio::fs::remove_file(path).await;
         }
 
         Ok(ToolResult {

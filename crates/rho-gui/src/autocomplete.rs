@@ -475,11 +475,13 @@ mod tests {
                 name: "calculator".into(),
                 description: "Math operations".into(),
                 path: "/tmp/calc/SKILL.md".into(),
+                ..Default::default()
             },
             SkillMetadata {
                 name: "formatter".into(),
                 description: "Code formatting".into(),
                 path: "/tmp/fmt/SKILL.md".into(),
+                ..Default::default()
             },
         ];
 
@@ -502,6 +504,7 @@ mod tests {
             name: "calc".into(),
             description: "Math".into(),
             path: skill_file,
+            ..Default::default()
         }];
 
         let (display, resolved) = resolve_references("/calc", tmp.path(), &skills, &[]);
@@ -539,6 +542,7 @@ mod tests {
             name: "tool".into(),
             description: "A tool".into(),
             path: skill_file,
+            ..Default::default()
         }];
 
         let input = "Use /tool and read @data.txt please";
@@ -559,6 +563,7 @@ mod tests {
             name: "calculator".into(),
             description: "Math".into(),
             path: skill_file,
+            ..Default::default()
         }];
 
         // Partial name after editing — should NOT resolve

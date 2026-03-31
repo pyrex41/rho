@@ -75,12 +75,13 @@ pub fn prune_tool_outputs(messages: &[Message], keep_recent: usize) -> Vec<Messa
 
 /// Build the transform function for AgentLoopConfig.
 ///
-/// Auto-compaction strategy:
-/// 1. If under threshold * context_window, return as-is
-/// 2. Prune tool outputs older than last 6 messages
-/// 3. If still over, prune more aggressively (keep last 2)
+/// Three-tier auto-compaction strategy:
+/// 1. Tier 1 (MicroCompact): Prune old tool outputs (no LLM call)
+/// 2. Tier 2 (SessionMemory): Replace old messages with session memory summary
+/// 3. If neither suffices, aggressive pruning
 pub fn make_compaction_transform(
     threshold: f64,
+    session_memory_path: Option<std::path::PathBuf>,
 ) -> Box<dyn Fn(&[Message], &Model) -> (Vec<Message>, Option<CompactionResult>) + Send + Sync> {
     Box::new(move |messages: &[Message], model: &Model| {
         let estimated = estimate_tokens(messages);
@@ -90,7 +91,7 @@ pub fn make_compaction_transform(
             return (messages.to_vec(), None);
         }
 
-        // Phase 1: Prune tool outputs, keep last 6
+        // Tier 1a: Prune tool outputs, keep last 6
         let pruned = prune_tool_outputs(messages, 6);
         let new_estimate = estimate_tokens(&pruned);
 
@@ -101,20 +102,64 @@ pub fn make_compaction_transform(
                     original_estimate: estimated,
                     compacted_estimate: new_estimate,
                     messages_pruned: messages.len().saturating_sub(6),
+                    tier: CompactionTier::MicroCompact,
                 }),
             );
         }
 
-        // Phase 2: More aggressive — keep last 2
+        // Tier 1b: More aggressive pruning — keep last 2
         let pruned = prune_tool_outputs(messages, 2);
         let new_estimate = estimate_tokens(&pruned);
 
+        if new_estimate <= limit {
+            return (
+                pruned,
+                Some(CompactionResult {
+                    original_estimate: estimated,
+                    compacted_estimate: new_estimate,
+                    messages_pruned: messages.len().saturating_sub(2),
+                    tier: CompactionTier::MicroCompact,
+                }),
+            );
+        }
+
+        // Tier 2: Session memory compaction — replace old prefix with summary
+        if let Some(ref mem_path) = session_memory_path {
+            if let Ok(content) = std::fs::read_to_string(mem_path) {
+                if !content.trim().is_empty() {
+                    let keep_recent = 6.min(messages.len());
+                    let summary_msg = Message::User {
+                        content: UserContent::Text(format!(
+                            "[Context compacted — session memory follows]\n\n{}",
+                            content
+                        )),
+                        timestamp: 0,
+                    };
+                    let mut compacted = vec![summary_msg];
+                    compacted.extend_from_slice(&messages[messages.len() - keep_recent..]);
+                    let new_estimate = estimate_tokens(&compacted);
+
+                    return (
+                        compacted,
+                        Some(CompactionResult {
+                            original_estimate: estimated,
+                            compacted_estimate: new_estimate,
+                            messages_pruned: messages.len() - keep_recent,
+                            tier: CompactionTier::SessionMemory,
+                        }),
+                    );
+                }
+            }
+        }
+
+        // Fallback: return aggressive prune result
         (
             pruned,
             Some(CompactionResult {
                 original_estimate: estimated,
                 compacted_estimate: new_estimate,
                 messages_pruned: messages.len().saturating_sub(2),
+                tier: CompactionTier::MicroCompact,
             }),
         )
     })
@@ -125,6 +170,15 @@ pub struct CompactionResult {
     pub original_estimate: usize,
     pub compacted_estimate: usize,
     pub messages_pruned: usize,
+    pub tier: CompactionTier,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompactionTier {
+    /// Tier 1: Prune old tool outputs (no LLM call).
+    MicroCompact,
+    /// Tier 2: Replace old messages with session memory summary.
+    SessionMemory,
 }
 
 /// Build a summary prompt for manual /compact.
@@ -258,7 +312,7 @@ mod tests {
 
     #[test]
     fn compaction_transform_no_op_under_threshold() {
-        let transform = make_compaction_transform(0.8);
+        let transform = make_compaction_transform(0.8, None);
         let model = Model {
             id: "test".into(),
             name: "test".into(),

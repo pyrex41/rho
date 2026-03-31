@@ -375,6 +375,7 @@ mod tests {
                     "type": "object",
                     "properties": { "command": { "type": "string" } }
                 }),
+                deferred: false,
             }],
         };
         let options = StreamOptions {
@@ -404,6 +405,7 @@ mod tests {
                 name: "read".into(),
                 description: "Read file".into(),
                 parameters: serde_json::json!({"type": "object"}),
+                deferred: false,
             }],
         };
         let options = StreamOptions {

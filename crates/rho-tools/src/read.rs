@@ -50,6 +50,10 @@ impl AgentTool for ReadTool {
         "read"
     }
 
+    fn is_concurrent_safe(&self) -> bool {
+        true
+    }
+
     fn label(&self) -> String {
         "Read File".to_string()
     }

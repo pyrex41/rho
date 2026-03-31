@@ -142,6 +142,10 @@ impl AgentTool for WebSearchTool {
         "web_search"
     }
 
+    fn is_concurrent_safe(&self) -> bool {
+        true
+    }
+
     fn label(&self) -> String {
         "Web Search".to_string()
     }

@@ -93,6 +93,9 @@ pub struct ToolDef {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value, // JSON Schema
+    /// If true, only the tool name is sent to the API (no schema).
+    /// The model must call ToolSearch to get the full schema before using this tool.
+    pub deferred: bool,
 }
 
 // === Agent Event (the union type that drives everything) ===
@@ -146,6 +149,25 @@ pub enum AgentEvent {
         hook_name: String,
         success: bool,
         summary: String,
+    },
+    PreToolUseHookEnd {
+        hook_name: String,
+        tool_name: String,
+        decision: String,
+    },
+    ToolExecutionDenied {
+        tool_call_id: String,
+        tool_name: String,
+        reason: String,
+    },
+    LifecycleHookEnd {
+        hook_name: String,
+        event: String,
+        success: bool,
+    },
+    SessionMemoryUpdateStarted,
+    SessionMemoryUpdated {
+        session_id: String,
     },
 }
 

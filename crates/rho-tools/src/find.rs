@@ -131,6 +131,10 @@ impl AgentTool for FindTool {
         "find"
     }
 
+    fn is_concurrent_safe(&self) -> bool {
+        true
+    }
+
     fn label(&self) -> String {
         "Find Files".to_string()
     }

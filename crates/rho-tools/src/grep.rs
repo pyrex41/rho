@@ -176,6 +176,10 @@ impl AgentTool for GrepTool {
         "grep"
     }
 
+    fn is_concurrent_safe(&self) -> bool {
+        true
+    }
+
     fn label(&self) -> String {
         "Grep".to_string()
     }

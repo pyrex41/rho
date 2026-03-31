@@ -25,6 +25,8 @@ pub struct ProjectConfig {
     pub post_tools_hooks: Vec<HookConfig>,
     pub agents: Vec<AgentDef>,
     pub max_agent_depth: Option<usize>,
+    /// Enable cache-optimized subagent forking (serializes parent context for children).
+    pub cache_sharing: bool,
 }
 
 impl Default for ProjectConfig {
@@ -42,6 +44,7 @@ impl Default for ProjectConfig {
             post_tools_hooks: Vec::new(),
             agents: Vec::new(),
             max_agent_depth: None,
+            cache_sharing: false,
         }
     }
 }
@@ -185,13 +188,7 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                 }
                 // Parse "- name: value" or just "- name:"
                 let rest = trimmed_line.strip_prefix("- ").unwrap().trim();
-                let mut hook = HookConfig {
-                    name: String::new(),
-                    command: String::new(),
-                    timeout: 30,
-                    inject_on_failure: true,
-                    trigger_tools: None,
-                };
+                let mut hook = HookConfig::default();
                 if let Some((k, v)) = rest.split_once(':') {
                     let k = k.trim();
                     let v = v.trim();
@@ -240,7 +237,7 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
             let value = value.trim();
 
             if value.is_empty() {
-                if key == "post_tools_hooks" {
+                if key == "post_tools_hooks" || key == "hooks" {
                     in_hooks = true;
                     continue;
                 }
@@ -263,6 +260,9 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                 }
                 "memories" => {
                     config.memories = value != "false";
+                }
+                "cache_sharing" => {
+                    config.cache_sharing = value == "true";
                 }
                 "max_agent_depth" => {
                     if let Ok(v) = value.parse::<usize>() {
@@ -326,12 +326,30 @@ fn apply_hook_field(hook: &mut HookConfig, key: &str, value: &str) {
         "inject_on_failure" => {
             hook.inject_on_failure = value != "false";
         }
+        "event" => {
+            hook.event = crate::hooks::parse_hook_event(value);
+        }
         "trigger_tools" => {
-            // Parse "[write, edit, bash]" or "write, edit, bash"
+            // Parse "[write, edit, bash]" or "[bash(git *), write]" or "write, edit, bash"
             let cleaned = value.trim_start_matches('[').trim_end_matches(']');
-            let tools: Vec<String> = cleaned.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-            if !tools.is_empty() {
-                hook.trigger_tools = Some(tools);
+            let items: Vec<String> = cleaned
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !items.is_empty() {
+                // Check if any items have matcher syntax (contain parentheses)
+                let has_matchers = items.iter().any(|s| s.contains('('));
+                if has_matchers {
+                    hook.tool_matchers = Some(
+                        items
+                            .iter()
+                            .map(|s| crate::hooks::ToolMatcher::parse(s))
+                            .collect(),
+                    );
+                } else {
+                    hook.trigger_tools = Some(items);
+                }
             }
         }
         _ => {}

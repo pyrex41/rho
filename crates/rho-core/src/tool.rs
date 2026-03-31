@@ -33,5 +33,18 @@ pub trait AgentTool: Send + Sync {
     fn description(&self) -> String;
     fn parameters_schema(&self) -> Value;
 
+    /// Whether this tool is safe to run concurrently with other concurrent-safe tools.
+    /// Read-only tools (read, grep, find, web_fetch, web_search) should return true.
+    /// Tools with side effects (write, edit, bash, task) should return false (default).
+    fn is_concurrent_safe(&self) -> bool {
+        false
+    }
+
+    /// Whether this tool's schema can be deferred (sent as name-only to the API).
+    /// When true and tool count > threshold, the model must call ToolSearch first.
+    fn is_deferrable(&self) -> bool {
+        false
+    }
+
     async fn execute(&self, tool_call_id: &str, params: Value, cancel: CancellationToken) -> Result<ToolResult, ToolError>;
 }

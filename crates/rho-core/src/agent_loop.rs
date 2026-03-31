@@ -9,6 +9,9 @@ use crate::{
     types::*,
 };
 
+/// When tool count exceeds this, deferrable tools send only their name to the API.
+pub const TOOL_DEFER_THRESHOLD: usize = 15;
+
 pub struct AgentLoopConfig {
     pub model: Model,
     pub api_key: String,
@@ -22,6 +25,11 @@ pub struct AgentLoopConfig {
     pub transform_messages:
         Option<Box<dyn Fn(&[Message], &Model) -> (Vec<Message>, Option<crate::compaction::CompactionResult>) + Send + Sync>>,
     pub post_tools_hooks: Vec<Arc<dyn crate::hooks::PostToolsHook>>,
+    pub pre_tool_hooks: Vec<Arc<dyn crate::hooks::PreToolUseHook>>,
+    pub lifecycle_hooks: Vec<Arc<dyn crate::hooks::LifecycleHook>>,
+    /// Shared reference for cache-optimized subagent forking.
+    /// Updated after each assistant response so TaskTool can serialize parent context.
+    pub shared_messages: Option<Arc<tokio::sync::RwLock<Vec<Message>>>>,
 }
 
 pub fn agent_loop(
@@ -45,6 +53,25 @@ async fn run_loop(
     mut stream: EventStreamProducer<AgentEvent, Vec<Message>>,
 ) {
     let _ = stream.push(AgentEvent::AgentStart).await;
+
+    // Fire SessionStart lifecycle hooks
+    for hook in config.lifecycle_hooks.iter().filter(|h| h.event() == crate::hooks::HookEvent::SessionStart) {
+        let hook_result = tokio::time::timeout(hook.timeout(), hook.execute(cancel.clone())).await;
+        let result = match hook_result {
+            Ok(r) => r,
+            Err(_) => crate::hooks::LifecycleHookResult {
+                steering_message: None,
+                success: false,
+                summary: format!("{}: timed out", hook.name()),
+            },
+        };
+        let _ = stream.push(AgentEvent::LifecycleHookEnd {
+            hook_name: hook.name().to_string(),
+            event: "session_start".into(),
+            success: result.success,
+        }).await;
+    }
+
     let mut messages = prompts;
 
     'outer: loop {
@@ -61,13 +88,39 @@ async fn run_loop(
             let _ = stream.push(AgentEvent::TurnStart).await;
 
             // 1. Build tool defs and stream assistant response
+            // Build tool defs, applying deferral logic when tool count exceeds threshold
+            let should_defer = config.tools.len() > TOOL_DEFER_THRESHOLD;
+            let previously_used: std::collections::HashSet<String> = if should_defer {
+                messages.iter().filter_map(|m| {
+                    if let Message::Assistant { content, .. } = m {
+                        content.iter().filter_map(|c| {
+                            if let Content::ToolCall { name, .. } = c {
+                                Some(name.clone())
+                            } else { None }
+                        }).next()
+                    } else { None }
+                }).collect()
+            } else {
+                std::collections::HashSet::new()
+            };
+
             let tool_defs: Vec<ToolDef> = config
                 .tools
                 .iter()
-                .map(|t| ToolDef {
-                    name: t.name().to_string(),
-                    description: t.description(),
-                    parameters: t.parameters_schema(),
+                .map(|t| {
+                    let deferred = should_defer
+                        && t.is_deferrable()
+                        && !previously_used.contains(t.name());
+                    ToolDef {
+                        name: t.name().to_string(),
+                        description: if deferred { String::new() } else { t.description() },
+                        parameters: if deferred {
+                            serde_json::json!({"type": "object", "properties": {}})
+                        } else {
+                            t.parameters_schema()
+                        },
+                        deferred,
+                    }
                 })
                 .collect();
 
@@ -101,6 +154,11 @@ async fn run_loop(
             let (tool_calls, stop_reason) = extract_tool_calls_and_stop(&assistant_msg);
             messages.push(assistant_msg.clone());
 
+            // Update shared messages for cache-optimized subagent forking
+            if let Some(ref shared) = config.shared_messages {
+                *shared.write().await = messages.clone();
+            }
+
             if tool_calls.is_empty() {
                 let _ = stream
                     .push(AgentEvent::TurnEnd {
@@ -115,70 +173,173 @@ async fn run_loop(
                 break; // break inner, check follow-up
             }
 
-            // 3. Execute tool calls sequentially
+            // 3. Execute tool calls (parallel for concurrent-safe, sequential otherwise)
             let mut tool_results = vec![];
+            let groups = group_tool_calls(&tool_calls, &config.tools);
 
-            for (i, (id, name, args)) in tool_calls.iter().enumerate() {
+            let mut steered = false;
+            for (group_idx, group) in groups.iter().enumerate() {
                 if cancel.is_cancelled() {
                     break 'outer;
                 }
 
-                // Check steering between tool calls (not before first one)
-                if i > 0 {
+                // Check steering between groups (not before first one)
+                if group_idx > 0 {
                     if let Some(ref get_steering) = config.get_steering_messages {
                         let steering = get_steering();
                         if !steering.is_empty() {
-                            // Skip remaining tool calls
-                            for (skip_id, skip_name, _) in &tool_calls[i..] {
-                                let skip_result = Message::ToolResult {
-                                    tool_call_id: skip_id.clone(),
-                                    tool_name: skip_name.clone(),
-                                    content: vec![Content::Text {
-                                        text: "Tool execution skipped due to steering".into(),
-                                    }],
-                                    is_error: true,
-                                    timestamp: now_ms(),
-                                };
-                                tool_results.push(skip_result.clone());
-                                messages.push(skip_result);
+                            // Skip remaining tool calls across all remaining groups
+                            for remaining_group in &groups[group_idx..] {
+                                for (id, name, _) in remaining_group.calls() {
+                                    let skip_result = Message::ToolResult {
+                                        tool_call_id: id.clone(),
+                                        tool_name: name.clone(),
+                                        content: vec![Content::Text {
+                                            text: "Tool execution skipped due to steering".into(),
+                                        }],
+                                        is_error: true,
+                                        timestamp: now_ms(),
+                                    };
+                                    tool_results.push(skip_result.clone());
+                                    messages.push(skip_result);
+                                }
                             }
                             messages.extend(steering);
+                            steered = true;
                             break;
                         }
                     }
                 }
 
-                // Execute tool
+                match group {
+                    ToolGroup::Sequential(id, name, args) => {
+                        // Run pre-tool hooks
+                        let mut effective_args = args.clone();
+                        let denied = run_pre_tool_hooks(
+                            &config.pre_tool_hooks,
+                            id,
+                            name,
+                            &mut effective_args,
+                            &cancel,
+                            &stream,
+                        )
+                        .await;
+
+                        if let Some(reason) = denied {
+                            // Tool was denied by a pre-tool hook
+                            let _ = stream.push(AgentEvent::ToolExecutionDenied {
+                                tool_call_id: id.clone(),
+                                tool_name: name.clone(),
+                                reason: reason.clone(),
+                            }).await;
+                            let tool_result_msg = Message::ToolResult {
+                                tool_call_id: id.clone(),
+                                tool_name: name.clone(),
+                                content: vec![Content::Text {
+                                    text: format!("Tool execution denied: {}", reason),
+                                }],
+                                is_error: true,
+                                timestamp: now_ms(),
+                            };
+                            tool_results.push(tool_result_msg.clone());
+                            messages.push(tool_result_msg);
+                            continue;
+                        }
+
+                        let _ = stream
+                            .push(AgentEvent::ToolExecutionStart {
+                                tool_call_id: id.clone(),
+                                tool_name: name.clone(),
+                                args: effective_args.clone(),
+                            })
+                            .await;
+
+                        let (result, is_error) =
+                            execute_tool_call(&config.tools, id, name, effective_args, cancel.clone()).await;
+
+                        let tool_result_msg = Message::ToolResult {
+                            tool_call_id: id.clone(),
+                            tool_name: name.clone(),
+                            content: result.content.clone(),
+                            is_error,
+                            timestamp: now_ms(),
+                        };
+                        tool_results.push(tool_result_msg.clone());
+                        messages.push(tool_result_msg);
+
+                        let _ = stream
+                            .push(AgentEvent::ToolExecutionEnd {
+                                tool_call_id: id.clone(),
+                                tool_name: name.clone(),
+                                result,
+                                is_error,
+                            })
+                            .await;
+                    }
+                    ToolGroup::Parallel(calls) => {
+                        // Emit all Start events
+                        for (id, name, args) in calls {
+                            let _ = stream
+                                .push(AgentEvent::ToolExecutionStart {
+                                    tool_call_id: id.clone(),
+                                    tool_name: name.clone(),
+                                    args: args.clone(),
+                                })
+                                .await;
+                        }
+
+                        // Execute all concurrently
+                        let futures: Vec<_> = calls
+                            .iter()
+                            .map(|(id, name, args)| {
+                                let tools = config.tools.clone();
+                                let cancel = cancel.clone();
+                                let id = id.clone();
+                                let name = name.clone();
+                                let args = args.clone();
+                                async move {
+                                    let (result, is_error) =
+                                        execute_tool_call(&tools, &id, &name, args, cancel).await;
+                                    (id, name, result, is_error)
+                                }
+                            })
+                            .collect();
+
+                        let results = futures::future::join_all(futures).await;
+
+                        // Emit all End events in original order
+                        for (id, name, result, is_error) in results {
+                            let tool_result_msg = Message::ToolResult {
+                                tool_call_id: id.clone(),
+                                tool_name: name.clone(),
+                                content: result.content.clone(),
+                                is_error,
+                                timestamp: now_ms(),
+                            };
+                            tool_results.push(tool_result_msg.clone());
+                            messages.push(tool_result_msg);
+
+                            let _ = stream
+                                .push(AgentEvent::ToolExecutionEnd {
+                                    tool_call_id: id.clone(),
+                                    tool_name: name.clone(),
+                                    result,
+                                    is_error,
+                                })
+                                .await;
+                        }
+                    }
+                }
+            }
+            // If we broke due to steering, skip post-tools hooks
+            if steered {
                 let _ = stream
-                    .push(AgentEvent::ToolExecutionStart {
-                        tool_call_id: id.clone(),
-                        tool_name: name.clone(),
-                        args: args.clone(),
+                    .push(AgentEvent::TurnEnd {
+                        message: assistant_msg,
+                        tool_results,
                     })
                     .await;
-
-                let (result, is_error) =
-                    execute_tool_call(&config.tools, id, name, args.clone(), cancel.clone()).await;
-
-                let tool_result_msg = Message::ToolResult {
-                    tool_call_id: id.clone(),
-                    tool_name: name.clone(),
-                    content: result.content.clone(),
-                    is_error,
-                    timestamp: now_ms(),
-                };
-
-                tool_results.push(tool_result_msg.clone());
-                messages.push(tool_result_msg);
-
-                let _ = stream
-                    .push(AgentEvent::ToolExecutionEnd {
-                        tool_call_id: id.clone(),
-                        tool_name: name.clone(),
-                        result,
-                        is_error,
-                    })
-                    .await;
+                continue;
             }
 
             // Run post-tools hooks if tools were called
@@ -219,6 +380,33 @@ async fn run_loop(
                             timestamp: now_ms(),
                         });
                     }
+                }
+            }
+
+            // Fire TurnEnd lifecycle hooks
+            for hook in config.lifecycle_hooks.iter().filter(|h| h.event() == crate::hooks::HookEvent::TurnEnd) {
+                if cancel.is_cancelled() {
+                    break 'outer;
+                }
+                let hook_result = tokio::time::timeout(hook.timeout(), hook.execute(cancel.clone())).await;
+                let result = match hook_result {
+                    Ok(r) => r,
+                    Err(_) => crate::hooks::LifecycleHookResult {
+                        steering_message: None,
+                        success: false,
+                        summary: format!("{}: timed out", hook.name()),
+                    },
+                };
+                let _ = stream.push(AgentEvent::LifecycleHookEnd {
+                    hook_name: hook.name().to_string(),
+                    event: "turn_end".into(),
+                    success: result.success,
+                }).await;
+                if let Some(steering) = result.steering_message {
+                    messages.push(Message::User {
+                        content: UserContent::Text(steering),
+                        timestamp: now_ms(),
+                    });
                 }
             }
 
@@ -391,6 +579,127 @@ fn extract_tool_calls_and_stop(
     }
 }
 
+/// Run pre-tool-use hooks. Returns Some(reason) if denied, None if allowed.
+/// May modify `args` in place if a hook returns AllowWithModifiedInput.
+async fn run_pre_tool_hooks(
+    hooks: &[Arc<dyn crate::hooks::PreToolUseHook>],
+    _tool_call_id: &str,
+    tool_name: &str,
+    args: &mut serde_json::Value,
+    cancel: &CancellationToken,
+    stream: &EventStreamProducer<AgentEvent, Vec<Message>>,
+) -> Option<String> {
+    for hook in hooks {
+        let hook_result = tokio::time::timeout(
+            hook.timeout(),
+            hook.execute(tool_name, args, cancel.clone()),
+        )
+        .await;
+
+        let result = match hook_result {
+            Ok(r) => r,
+            Err(_) => {
+                // Timeout — allow by default
+                let _ = stream.push(AgentEvent::PreToolUseHookEnd {
+                    hook_name: hook.name().to_string(),
+                    tool_name: tool_name.to_string(),
+                    decision: "allow (timeout)".into(),
+                }).await;
+                continue;
+            }
+        };
+
+        match result {
+            crate::hooks::PreToolUseResult::Allow => {
+                let _ = stream.push(AgentEvent::PreToolUseHookEnd {
+                    hook_name: hook.name().to_string(),
+                    tool_name: tool_name.to_string(),
+                    decision: "allow".into(),
+                }).await;
+            }
+            crate::hooks::PreToolUseResult::AllowWithModifiedInput(new_args) => {
+                *args = new_args;
+                let _ = stream.push(AgentEvent::PreToolUseHookEnd {
+                    hook_name: hook.name().to_string(),
+                    tool_name: tool_name.to_string(),
+                    decision: "allow (modified)".into(),
+                }).await;
+            }
+            crate::hooks::PreToolUseResult::Deny { reason } => {
+                let _ = stream.push(AgentEvent::PreToolUseHookEnd {
+                    hook_name: hook.name().to_string(),
+                    tool_name: tool_name.to_string(),
+                    decision: "deny".into(),
+                }).await;
+                return Some(reason);
+            }
+        }
+    }
+    None
+}
+
+/// A group of tool calls that can be executed together.
+enum ToolGroup {
+    /// A single tool that must run sequentially (has side effects).
+    Sequential(String, String, serde_json::Value),
+    /// Multiple concurrent-safe tools that can run in parallel.
+    Parallel(Vec<(String, String, serde_json::Value)>),
+}
+
+impl ToolGroup {
+    /// Get all (id, name, args) tuples in this group.
+    fn calls(&self) -> Vec<(&String, &String, &serde_json::Value)> {
+        match self {
+            ToolGroup::Sequential(id, name, args) => vec![(id, name, args)],
+            ToolGroup::Parallel(calls) => calls.iter().map(|(id, name, args)| (id, name, args)).collect(),
+        }
+    }
+}
+
+/// Partition tool calls into contiguous groups of parallel (concurrent-safe) and sequential tools.
+fn group_tool_calls(
+    tool_calls: &[(String, String, serde_json::Value)],
+    tools: &[Arc<dyn AgentTool>],
+) -> Vec<ToolGroup> {
+    let mut groups = Vec::new();
+    let mut parallel_buf: Vec<(String, String, serde_json::Value)> = Vec::new();
+
+    for (id, name, args) in tool_calls {
+        let is_safe = tools
+            .iter()
+            .find(|t| t.name() == name)
+            .map(|t| t.is_concurrent_safe())
+            .unwrap_or(false);
+
+        if is_safe {
+            parallel_buf.push((id.clone(), name.clone(), args.clone()));
+        } else {
+            // Flush any accumulated parallel tools first
+            if !parallel_buf.is_empty() {
+                if parallel_buf.len() == 1 {
+                    let (id, name, args) = parallel_buf.pop().unwrap();
+                    groups.push(ToolGroup::Sequential(id, name, args));
+                } else {
+                    groups.push(ToolGroup::Parallel(std::mem::take(&mut parallel_buf)));
+                }
+            }
+            groups.push(ToolGroup::Sequential(id.clone(), name.clone(), args.clone()));
+        }
+    }
+
+    // Flush remaining parallel buffer
+    if !parallel_buf.is_empty() {
+        if parallel_buf.len() == 1 {
+            let (id, name, args) = parallel_buf.pop().unwrap();
+            groups.push(ToolGroup::Sequential(id, name, args));
+        } else {
+            groups.push(ToolGroup::Parallel(std::mem::take(&mut parallel_buf)));
+        }
+    }
+
+    groups
+}
+
 async fn execute_tool_call(
     tools: &[Arc<dyn AgentTool>],
     id: &str,
@@ -532,6 +841,9 @@ mod tests {
             get_follow_up_messages: None,
             transform_messages: None,
             post_tools_hooks: vec![],
+            pre_tool_hooks: vec![],
+            lifecycle_hooks: vec![],
+            shared_messages: None,
         };
 
         let prompts = vec![Message::User {
@@ -576,6 +888,27 @@ mod tests {
     struct MockTool {
         tool_name: String,
         result: ToolResult,
+        concurrent_safe: bool,
+    }
+
+    impl MockTool {
+        fn new(name: &str, output: &str) -> Self {
+            Self {
+                tool_name: name.into(),
+                result: ToolResult {
+                    content: vec![Content::Text {
+                        text: output.into(),
+                    }],
+                    details: serde_json::json!({}),
+                },
+                concurrent_safe: false,
+            }
+        }
+
+        fn concurrent(mut self) -> Self {
+            self.concurrent_safe = true;
+            self
+        }
     }
 
     #[async_trait]
@@ -591,6 +924,9 @@ mod tests {
         }
         fn parameters_schema(&self) -> serde_json::Value {
             serde_json::json!({"type": "object"})
+        }
+        fn is_concurrent_safe(&self) -> bool {
+            self.concurrent_safe
         }
         async fn execute(
             &self,
@@ -665,15 +1001,7 @@ mod tests {
             ),
         ]);
 
-        let mock_tool = Arc::new(MockTool {
-            tool_name: "mock_tool".into(),
-            result: ToolResult {
-                content: vec![Content::Text {
-                    text: "tool output".into(),
-                }],
-                details: serde_json::json!({}),
-            },
-        });
+        let mock_tool = Arc::new(MockTool::new("mock_tool", "tool output"));
 
         let config = AgentLoopConfig {
             model: test_model(),
@@ -687,6 +1015,9 @@ mod tests {
             get_follow_up_messages: None,
             transform_messages: None,
             post_tools_hooks: vec![],
+            pre_tool_hooks: vec![],
+            lifecycle_hooks: vec![],
+            shared_messages: None,
         };
 
         let prompts = vec![Message::User {
@@ -795,6 +1126,9 @@ mod tests {
             get_follow_up_messages: None,
             transform_messages: None,
             post_tools_hooks: vec![],
+            pre_tool_hooks: vec![],
+            lifecycle_hooks: vec![],
+            shared_messages: None,
         };
 
         let prompts = vec![Message::User {
@@ -814,5 +1148,74 @@ mod tests {
             |e| matches!(e, AgentEvent::ToolExecutionEnd { is_error, tool_name, .. } if *is_error && tool_name == "nonexistent_tool"),
         );
         assert!(has_error_tool);
+    }
+
+    #[test]
+    fn test_group_tool_calls_all_sequential() {
+        let tools: Vec<Arc<dyn AgentTool>> = vec![
+            Arc::new(MockTool::new("write", "ok")),
+            Arc::new(MockTool::new("bash", "ok")),
+        ];
+        let calls = vec![
+            ("c1".into(), "write".into(), serde_json::json!({})),
+            ("c2".into(), "bash".into(), serde_json::json!({})),
+        ];
+        let groups = group_tool_calls(&calls, &tools);
+        assert_eq!(groups.len(), 2);
+        assert!(matches!(&groups[0], ToolGroup::Sequential(_, name, _) if name == "write"));
+        assert!(matches!(&groups[1], ToolGroup::Sequential(_, name, _) if name == "bash"));
+    }
+
+    #[test]
+    fn test_group_tool_calls_all_parallel() {
+        let tools: Vec<Arc<dyn AgentTool>> = vec![
+            Arc::new(MockTool::new("read", "ok").concurrent()),
+            Arc::new(MockTool::new("grep", "ok").concurrent()),
+            Arc::new(MockTool::new("find", "ok").concurrent()),
+        ];
+        let calls = vec![
+            ("c1".into(), "read".into(), serde_json::json!({})),
+            ("c2".into(), "grep".into(), serde_json::json!({})),
+            ("c3".into(), "find".into(), serde_json::json!({})),
+        ];
+        let groups = group_tool_calls(&calls, &tools);
+        assert_eq!(groups.len(), 1);
+        assert!(matches!(&groups[0], ToolGroup::Parallel(calls) if calls.len() == 3));
+    }
+
+    #[test]
+    fn test_group_tool_calls_mixed() {
+        let tools: Vec<Arc<dyn AgentTool>> = vec![
+            Arc::new(MockTool::new("read", "ok").concurrent()),
+            Arc::new(MockTool::new("grep", "ok").concurrent()),
+            Arc::new(MockTool::new("write", "ok")),
+            Arc::new(MockTool::new("find", "ok").concurrent()),
+        ];
+        let calls = vec![
+            ("c1".into(), "read".into(), serde_json::json!({})),
+            ("c2".into(), "grep".into(), serde_json::json!({})),
+            ("c3".into(), "write".into(), serde_json::json!({})),
+            ("c4".into(), "find".into(), serde_json::json!({})),
+        ];
+        let groups = group_tool_calls(&calls, &tools);
+        // [read, grep] -> Parallel, [write] -> Sequential, [find] -> Sequential (single concurrent = sequential)
+        assert_eq!(groups.len(), 3);
+        assert!(matches!(&groups[0], ToolGroup::Parallel(calls) if calls.len() == 2));
+        assert!(matches!(&groups[1], ToolGroup::Sequential(_, name, _) if name == "write"));
+        assert!(matches!(&groups[2], ToolGroup::Sequential(_, name, _) if name == "find"));
+    }
+
+    #[test]
+    fn test_group_tool_calls_single_concurrent_is_sequential() {
+        let tools: Vec<Arc<dyn AgentTool>> = vec![
+            Arc::new(MockTool::new("read", "ok").concurrent()),
+        ];
+        let calls = vec![
+            ("c1".into(), "read".into(), serde_json::json!({})),
+        ];
+        let groups = group_tool_calls(&calls, &tools);
+        assert_eq!(groups.len(), 1);
+        // Single concurrent tool should be Sequential (no overhead of join_all)
+        assert!(matches!(&groups[0], ToolGroup::Sequential(..)));
     }
 }

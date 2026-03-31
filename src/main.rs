@@ -82,6 +82,10 @@ struct Cli {
     /// Output format: text or stream-json
     #[arg(long, default_value = "text")]
     output_format: String,
+
+    /// Load pre-seeded messages from a JSON context file (for cache-optimized subagent forking)
+    #[arg(long)]
+    context_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -485,7 +489,7 @@ async fn run_agent_turn(
     output_format: OutputFormat,
     post_tools_hooks: Vec<Arc<dyn rho_core::hooks::PostToolsHook>>,
 ) -> Vec<Message> {
-    let transform_messages = compact_threshold.map(compaction::make_compaction_transform);
+    let transform_messages = compact_threshold.map(|t| compaction::make_compaction_transform(t, None));
     let config = AgentLoopConfig {
         model,
         api_key,
@@ -498,6 +502,9 @@ async fn run_agent_turn(
         get_follow_up_messages: None,
         transform_messages,
         post_tools_hooks,
+        pre_tool_hooks: vec![],
+        lifecycle_hooks: vec![],
+        shared_messages: None,
     };
 
     let mut consumer = agent_loop(messages.clone(), config, cancel);
@@ -1087,6 +1094,14 @@ async fn main() -> Result<()> {
 
             let mut session_id = cli.resume.clone();
             let mut history: Vec<Message> = Vec::new();
+
+            // Load pre-seeded messages from context file (cache-optimized subagent forking)
+            if let Some(ref context_path) = cli.context_file {
+                let content = std::fs::read_to_string(context_path)
+                    .with_context(|| format!("Failed to read context file: {}", context_path.display()))?;
+                history = serde_json::from_str(&content)
+                    .with_context(|| "Failed to parse context file as JSON array of messages")?;
+            }
 
             if let Some(store) = session_store.as_ref() {
                 if let Some(ref existing_id) = session_id {

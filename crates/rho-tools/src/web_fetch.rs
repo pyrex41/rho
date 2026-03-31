@@ -150,6 +150,10 @@ impl AgentTool for WebFetchTool {
         "web_fetch"
     }
 
+    fn is_concurrent_safe(&self) -> bool {
+        true
+    }
+
     fn label(&self) -> String {
         "Web Fetch".to_string()
     }

@@ -603,6 +603,9 @@ pub async fn run_autoresearch(config: AutoresearchConfig, cancel: CancellationTo
             get_follow_up_messages: None,
             transform_messages: None,
             post_tools_hooks: config.post_tools_hooks.clone(),
+            pre_tool_hooks: vec![],
+            lifecycle_hooks: vec![],
+            shared_messages: None,
         };
 
         let mut consumer = agent_loop(messages, loop_config, cancel.clone());

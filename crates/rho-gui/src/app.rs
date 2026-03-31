@@ -909,7 +909,7 @@ impl RhoApp {
 
         // Build compaction transform if configured
         let transform_messages = self.project_config.compact_threshold.map(|threshold| {
-            compaction::make_compaction_transform(threshold)
+            compaction::make_compaction_transform(threshold, None)
         });
 
         let config = AgentLoopConfig {
@@ -924,6 +924,9 @@ impl RhoApp {
             get_follow_up_messages: None,
             transform_messages,
             post_tools_hooks: vec![],
+            pre_tool_hooks: vec![],
+            lifecycle_hooks: vec![],
+            shared_messages: None,
         };
 
         let consumer = agent_loop(prompts, config, cancel);
