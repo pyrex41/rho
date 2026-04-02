@@ -18,48 +18,49 @@ A fast, extensible AI coding agent built in Rust. Rho gives an LLM a set of deve
 
 ## Installation
 
-### From source
+### From source (CLI + GUI)
 
 ```bash
 git clone https://github.com/pyrex41/rho.git
 cd rho
+# CLI only
 cargo install --path .
+# GUI (recommended for interactive use)
+cargo install --path crates/rho-gui
 ```
 
-### Install script
+This installs both `rho-cli` and `rho` (GUI) binaries.
+### Install script (CLI only)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pyrex41/rho/main/install.sh | bash
 ```
 
-This detects your OS and architecture, downloads the latest release binary, and installs it to `~/.local/bin` (or a directory you specify with `RHO_INSTALL_DIR`).
-
+This downloads the latest `rho-cli` pre-built binary. For the GUI, use the from-source instructions above.
 ### Pre-built binaries
 
-Download from [GitHub Releases](https://github.com/pyrex41/rho/releases). Binaries are available for:
-- Linux x86_64 / ARM64
-- macOS x86_64 / ARM64 (Apple Silicon)
-- Windows x86_64
+Download from [GitHub Releases](https://github.com/pyrex41/rho/releases). Pre-built binaries are provided for the CLI (`rho-cli`).
+
+**Note on GUI**: The native GUI is currently only available by building from source (see above). It provides a rich interface with model picker, markdown rendering, and autocomplete.
 
 ## Quick start
 
 ```bash
 # Set your API key
 export ANTHROPIC_API_KEY="sk-..."
-
-# Run a one-shot prompt
-rho-cli "add error handling to src/main.rs"
-
-# Use a specific model
-rho-cli --model claude-opus "refactor the auth module"
-
-# Enable extended thinking
-rho-cli --thinking high "design a caching layer"
-
-# Resume a previous session interactively
-rho-cli --resume <session-id>
 ```
 
+**CLI:**
+
+```bash
+# One-shot prompt
+rho-cli "add error handling to src/main.rs"
+
+# Or use GUI
+rho
+```
+
+The GUI provides an interactive chat with model selection, history, and visual tool call display.
 ## Usage
 
 ```
