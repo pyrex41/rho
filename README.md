@@ -175,22 +175,53 @@ rho-cli autoresearch \
 
 ### xAI Grok
 - `grok-3`, `grok-3-mini`, `grok-2`
-- `grok-4.20-reasoning`, `grok-4.20-non-reasoning` (experimental)
+- `grok-4.20-reasoning`, `grok-4.20-non-reasoning` (experimental beta)
+- `grok-4.20-multi-agent` (multi-agent responses endpoint)
+- Additional experimental: `grok-code-fast-1`, `grok-4-1-reasoning`, etc.
 
-### Custom models
+The built-in models are kept up-to-date in `crates/rho-core/src/models.rs`. Zen models (via `OPENCODE_ZEN_API_KEY`) provide additional latest options prefixed with `zen-`.
 
-Add models via `~/.rho/models.toml`:
+### Local Models (Ollama, MLX, etc.)
+Rho has generic support for any OpenAI-compatible local server via custom config.
 
+**Ollama example:**
+```bash
+# Start Ollama and pull model
+ollama serve
+ollama pull gemma2:9b
+```
+
+Then add to `~/.rho/models.toml`:
 ```toml
 [[model]]
-id = "gpt-4o"
+id = "ollama-gemma"
 provider = "openai"
-model_id = "gpt-4o"
-api_key_env = "OPENAI_API_KEY"
-context_window = 128000
-max_tokens = 16384
-thinking = false
+model_id = "gemma2:9b"
+base_url = "http://localhost:11434/v1"
+context_window = 8192
+max_tokens = 4096
+# No api_key needed for localhost
 ```
+
+**MLX (for ../gemma or other local models on Apple Silicon):**
+```bash
+# Install and run MLX server pointing to your model dir
+pip install mlx-lm
+mlx_lm.server --model ../gemma --port 8080
+```
+
+Then:
+```toml
+[[model]]
+id = "mlx-gemma"
+provider = "openai"
+model_id = "gemma"  # adjust to what the server expects
+base_url = "http://localhost:8080/v1"
+context_window = 8192
+max_tokens = 4096
+```
+
+Localhost base URLs automatically use `"local"` as the API key (no auth required).
 
 ## Configuration
 

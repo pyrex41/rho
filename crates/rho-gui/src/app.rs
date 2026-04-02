@@ -586,10 +586,37 @@ impl RhoApp {
                     .map(|h| h.join(".rho").join("models.toml"))
                     .and_then(|p| std::fs::read_to_string(p).ok())
                     .unwrap_or_else(|| {
-                        "# Add custom models here.\n# Example:\n\
-                        # [[model]]\n# id = \"gpt-4o\"\n# provider = \"openai\"\n\
-                        # model_id = \"gpt-4o\"\n# api_key_env = \"OPENAI_API_KEY\"\n\
-                        # context_window = 128000\n# max_tokens = 16384\n"
+                        "# Add custom models here. Built-ins are in rho-core/src/models.rs.\n\
+                        # Local models (Ollama/MLX) use OpenAI provider with base_url.\n\
+                        # Examples:\n\
+                        #\n\
+                        # Ollama:\n\
+                        # [[model]]\n\
+                        # id = \"ollama-gemma\"\n\
+                        # provider = \"openai\"\n\
+                        # model_id = \"gemma2:9b\"\n\
+                        # base_url = \"http://localhost:11434/v1\"\n\
+                        # context_window = 8192\n\
+                        # max_tokens = 4096\n\
+                        #\n\
+                        # MLX local model (e.g. ../gemma):\n\
+                        # First run: mlx_lm.server --model ../gemma --port 8080\n\
+                        # [[model]]\n\
+                        # id = \"mlx-gemma\"\n\
+                        # provider = \"openai\"\n\
+                        # model_id = \"gemma\"\n\
+                        # base_url = \"http://localhost:8080/v1\"\n\
+                        # context_window = 8192\n\
+                        # max_tokens = 4096\n\
+                        #\n\
+                        # Cloud OpenAI example:\n\
+                        # [[model]]\n\
+                        # id = \"gpt-4o\"\n\
+                        # provider = \"openai\"\n\
+                        # model_id = \"gpt-4o\"\n\
+                        # api_key_env = \"OPENAI_API_KEY\"\n\
+                        # context_window = 128000\n\
+                        # max_tokens = 16384\n"
                             .to_string()
                     });
                 self.project_config_content =
