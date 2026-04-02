@@ -586,7 +586,7 @@ impl RhoApp {
                     .map(|h| h.join(".rho").join("models.toml"))
                     .and_then(|p| std::fs::read_to_string(p).ok())
                     .unwrap_or_else(|| {
-                        "# Add custom models here. Built-ins are in rho-core/src/models.rs.\n\
+                        "# Add custom models here. Built-ins are in rho-core/src/models.rs (includes latest OpenAI gpt-5.4 series, Anthropic, xAI, and dynamic Zen models).\n\
                         # Local models (Ollama/MLX) use OpenAI provider with base_url.\n\
                         # Examples:\n\
                         #\n\
@@ -611,12 +611,12 @@ impl RhoApp {
                         #\n\
                         # Cloud OpenAI example:\n\
                         # [[model]]\n\
-                        # id = \"gpt-4o\"\n\
+                        # id = \"gpt-5.4\"\n\
                         # provider = \"openai\"\n\
-                        # model_id = \"gpt-4o\"\n\
+                        # model_id = \"gpt-5.4\"\n\
                         # api_key_env = \"OPENAI_API_KEY\"\n\
-                        # context_window = 128000\n\
-                        # max_tokens = 16384\n"
+                        # context_window = 1000000\n\
+                        # max_tokens = 128000\n"
                             .to_string()
                     });
                 self.project_config_content =

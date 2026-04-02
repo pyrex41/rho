@@ -212,7 +212,7 @@ fn built_in_models() -> Vec<ModelConfig> {
         ModelConfig {
             id: "claude-sonnet".into(),
             provider: ProviderType::Anthropic,
-            model_id: "claude-sonnet-4-5-20250929".into(),
+            model_id: "claude-sonnet-4-6".into(),
             base_url: String::new(),
             api_key_env: Some("ANTHROPIC_API_KEY".into()),
             context_window: 200_000,
@@ -355,6 +355,40 @@ fn built_in_models() -> Vec<ModelConfig> {
             thinking: false,
             server_tools: None,
         },
+        // OpenAI GPT models (latest as of 2026)
+        ModelConfig {
+            id: "gpt-5.4".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "gpt-5.4".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            api_key_env: Some("OPENAI_API_KEY".into()),
+            context_window: 1_000_000,
+            max_tokens: 128_000,
+            thinking: false,
+            server_tools: None,
+        },
+        ModelConfig {
+            id: "gpt-5.4-mini".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "gpt-5.4-mini".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            api_key_env: Some("OPENAI_API_KEY".into()),
+            context_window: 400_000,
+            max_tokens: 128_000,
+            thinking: false,
+            server_tools: None,
+        },
+        ModelConfig {
+            id: "gpt-5.4-nano".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "gpt-5.4-nano".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            api_key_env: Some("OPENAI_API_KEY".into()),
+            context_window: 400_000,
+            max_tokens: 128_000,
+            thinking: false,
+            server_tools: None,
+        },
 
     ]
 }
@@ -366,8 +400,8 @@ mod tests {
     #[test]
     fn new_has_builtin_models() {
         let registry = ModelRegistry::new();
-        // 3 Anthropic + 10 xAI/Grok
-        assert_eq!(registry.list().len(), 13);
+        // 3 Anthropic + 3 OpenAI + 10 xAI/Grok
+        assert_eq!(registry.list().len(), 16);
     }
 
     #[test]
@@ -384,7 +418,7 @@ mod tests {
     fn get_builtin_model() {
         let registry = ModelRegistry::new();
         let m = registry.get("claude-sonnet").unwrap();
-        assert_eq!(m.model_id, "claude-sonnet-4-5-20250929");
+        assert_eq!(m.model_id, "claude-sonnet-4-6");
         assert_eq!(m.provider, ProviderType::Anthropic);
         assert!(!m.thinking);
     }
@@ -399,7 +433,7 @@ mod tests {
     #[test]
     fn get_missing_returns_none() {
         let registry = ModelRegistry::new();
-        assert!(registry.get("gpt-4o").is_none());
+        assert!(registry.get("non-existent-model").is_none());
     }
 
     #[test]

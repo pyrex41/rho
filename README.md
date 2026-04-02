@@ -169,9 +169,14 @@ rho-cli autoresearch \
 ## Supported models
 
 ### Anthropic Claude
-- `claude-sonnet` — Claude Sonnet 4.5 (default)
+- `claude-sonnet` — Claude Sonnet 4.6 (default)
 - `claude-opus` — Claude Opus 4.6 (with extended thinking)
 - `claude-haiku` — Claude Haiku 4.5
+
+### OpenAI
+- `gpt-5.4` — Latest flagship model with 1M context
+- `gpt-5.4-mini` — Strong mini model for coding and agents
+- `gpt-5.4-nano` — Efficient for high-volume tasks
 
 ### xAI Grok
 - `grok-3`, `grok-3-mini`, `grok-2`
