@@ -2,7 +2,6 @@
 set -euo pipefail
 
 REPO="pyrex41/rho"
-BINARY_NAME="rho-cli"
 INSTALL_DIR="${RHO_INSTALL_DIR:-$HOME/.local/bin}"
 
 info() { printf '\033[1;34m%s\033[0m\n' "$*"; }
@@ -24,13 +23,65 @@ esac
 
 info "Detected: ${OS} ${ARCH}"
 
-# Determine asset name pattern (must match CI asset names)
+# Determine asset name pattern label
 case "$(uname -m)" in
     x86_64|amd64) ARCH_LABEL="x64" ;;
     aarch64|arm64) ARCH_LABEL="arm64" ;;
 esac
 
-ASSET_PATTERN="rho-cli-${OS}-${ARCH_LABEL}"
+# Function to download and install a binary from GitHub release
+install_binary() {
+  local bin_name="$1"
+  local asset_pattern="$2"
+  local required="${3:-false}"
+
+  info "Looking for ${bin_name} pre-build (${asset_pattern})..."
+
+  local DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep '"browser_download_url"' | grep "$asset_pattern" | grep -v '\.sha256' | head -1 | sed 's/.*"\(https[^"]*\)".*/\1/')
+
+  if [ -z "$DOWNLOAD_URL" ]; then
+    if [ "$required" = "true" ]; then
+      error "No binary found for ${asset_pattern}. Check https://github.com/${REPO}/releases for available assets."
+    else
+      info "No pre-built ${bin_name} available for this platform. Skipping."
+      return 0
+    fi
+  fi
+
+  info "Downloading ${DOWNLOAD_URL}..."
+
+  local TMPDIR=$(mktemp -d)
+  if command -v curl &>/dev/null; then
+    curl -fsSL -o "${TMPDIR}/archive" "$DOWNLOAD_URL"
+  else
+    wget -qO "${TMPDIR}/archive" "$DOWNLOAD_URL"
+  fi
+
+  cd "$TMPDIR"
+  local BINARY
+  case "$DOWNLOAD_URL" in
+    *.tar.gz|*.tgz)
+      tar xzf archive
+      BINARY=$(find . -name "$bin_name" -type f | head -1)
+      ;;
+    *.zip)
+      unzip -q archive
+      BINARY=$(find . -name "$bin_name" -type f | head -1)
+      ;;
+    *)
+      BINARY="archive"
+      ;;
+  esac
+
+  [ -z "$BINARY" ] && error "Binary '${bin_name}' not found in archive"
+
+  mkdir -p "$INSTALL_DIR"
+  cp "$BINARY" "${INSTALL_DIR}/${bin_name}"
+  chmod +x "${INSTALL_DIR}/${bin_name}"
+
+  info "Installed ${bin_name} to ${INSTALL_DIR}/${bin_name}"
+  rm -rf "$TMPDIR"
+}
 
 # Get latest release tag
 info "Fetching latest release..."
@@ -47,46 +98,9 @@ TAG=$(echo "$RELEASE_JSON" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": 
 [ -z "$TAG" ] && error "Could not determine latest release tag"
 info "Latest release: ${TAG}"
 
-# Find matching asset URL
-DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep '"browser_download_url"' | grep "$ASSET_PATTERN" | grep -v '\.sha256' | head -1 | sed 's/.*"\(https[^"]*\)".*/\1/')
-[ -z "$DOWNLOAD_URL" ] && error "No binary found for ${TARGET}. Check https://github.com/${REPO}/releases for available assets."
-
-info "Downloading ${DOWNLOAD_URL}..."
-
-# Download to temp location
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
-
-if command -v curl &>/dev/null; then
-    curl -fsSL -o "${TMPDIR}/archive" "$DOWNLOAD_URL"
-else
-    wget -qO "${TMPDIR}/archive" "$DOWNLOAD_URL"
-fi
-
-# Extract if archive, otherwise treat as raw binary
-cd "$TMPDIR"
-case "$DOWNLOAD_URL" in
-    *.tar.gz|*.tgz)
-        tar xzf archive
-        BINARY=$(find . -name "$BINARY_NAME" -type f | head -1)
-        [ -z "$BINARY" ] && error "Binary '${BINARY_NAME}' not found in archive"
-        ;;
-    *.zip)
-        unzip -q archive
-        BINARY=$(find . -name "$BINARY_NAME" -type f | head -1)
-        [ -z "$BINARY" ] && error "Binary '${BINARY_NAME}' not found in archive"
-        ;;
-    *)
-        BINARY="archive"
-        ;;
-esac
-
-# Install
-mkdir -p "$INSTALL_DIR"
-cp "$BINARY" "${INSTALL_DIR}/${BINARY_NAME}"
-chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
-
-info "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}"
+# Install CLI (required) and GUI (optional where available)
+install_binary "rho-cli" "rho-cli-${OS}-${ARCH_LABEL}" true
+install_binary "rho" "rho-${OS}-${ARCH_LABEL}" false
 
 # Check if install dir is in PATH
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
@@ -98,4 +112,4 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
     echo "Add this to your shell profile (~/.bashrc, ~/.zshrc, etc.) to make it permanent."
 fi
 
-info "Done! Run 'rho-cli --help' to get started."
+info "Done! Run 'rho' for the GUI or 'rho-cli --help' to get started."

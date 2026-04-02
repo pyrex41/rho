@@ -23,25 +23,25 @@ A fast, extensible AI coding agent built in Rust. Rho gives an LLM a set of deve
 ```bash
 git clone https://github.com/pyrex41/rho.git
 cd rho
-# CLI only
 cargo install --path .
-# GUI (recommended for interactive use)
 cargo install --path crates/rho-gui
 ```
 
 This installs both `rho-cli` and `rho` (GUI) binaries.
-### Install script (CLI only)
+
+### Install script (CLI + GUI)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pyrex41/rho/main/install.sh | bash
 ```
 
-This downloads the latest `rho-cli` pre-built binary. For the GUI, use the from-source instructions above.
+This downloads the latest pre-built binaries for both `rho-cli` and `rho` (GUI).
+
 ### Pre-built binaries
 
-Download from [GitHub Releases](https://github.com/pyrex41/rho/releases). Pre-built binaries are provided for the CLI (`rho-cli`).
+Download from [GitHub Releases](https://github.com/pyrex41/rho/releases). Pre-built binaries are provided for both the CLI (`rho-cli`) and GUI (`rho`).
 
-**Note on GUI**: The native GUI is currently only available by building from source (see above). It provides a rich interface with model picker, markdown rendering, and autocomplete.
+The GUI provides a rich native interface with model picker, markdown rendering, autocomplete, and visual tool call display.
 
 ## Quick start
 
