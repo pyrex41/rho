@@ -80,9 +80,14 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         )
         .push(text(dir_name).size(14));
 
-    // Model picker
+    // Model picker — available models first, then unavailable dimmed
     col = col.push(text("MODEL").size(11).color(color!(0x565f89)));
-    for m in app.model_registry.list() {
+
+    let all_models = app.model_registry.list();
+    let has_any_available = all_models.iter().any(|m| app.available_model_ids.contains(&m.id));
+
+    // Available models
+    for m in all_models.iter().filter(|m| app.available_model_ids.contains(&m.id)) {
         let is_current = m.id == app.model_config.id;
         let label = if is_current {
             format!("▶ {}", m.id)
@@ -90,21 +95,40 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
             format!("  {}", m.id)
         };
         let color = if is_current {
-            color!(0xa9b1d6)
+            color!(0x7aa2f7)
         } else {
-            color!(0x565f89)
+            color!(0xa9b1d6)
         };
         let model_id = m.id.clone();
         col = col.push(
             button(text(label).size(13).color(color))
                 .style(|_theme, _status| button::Style {
                     background: None,
-                    text_color: color!(0xa9b1d6),
                     ..Default::default()
                 })
                 .on_press(Message::SwitchModel(model_id))
                 .padding([0, 0]),
         );
+    }
+
+    // Unavailable models (dimmed, with hint)
+    let unavailable: Vec<_> = all_models.iter().filter(|m| !app.available_model_ids.contains(&m.id)).collect();
+    if !unavailable.is_empty() {
+        if has_any_available {
+            col = col.push(text("  ─── no key ───").size(10).color(color!(0x3b4261)));
+        }
+        for m in unavailable {
+            let model_id = m.id.clone();
+            col = col.push(
+                button(text(format!("  {}", m.id)).size(12).color(color!(0x3b4261)))
+                    .style(|_theme, _status| button::Style {
+                        background: None,
+                        ..Default::default()
+                    })
+                    .on_press(Message::SwitchModel(model_id))
+                    .padding([0, 0]),
+            );
+        }
     }
 
     // Context usage — always visible
@@ -369,6 +393,11 @@ fn format_tokens(n: u64) -> String {
 fn render_chat<'a>(app: &'a RhoApp) -> Element<'a, Message> {
     let mut blocks_col = Column::new().spacing(12).padding(20);
 
+    // Show welcome/setup screen if no models are available and chat is empty
+    if app.available_model_ids.is_empty() && app.messages.is_empty() {
+        blocks_col = blocks_col.push(render_setup_guide());
+    }
+
     for block in &app.messages {
         blocks_col = blocks_col.push(render_block(block, &app.expanded_tools));
     }
@@ -497,6 +526,84 @@ fn render_chat<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+// --- Setup guide (first-run) ---
+
+fn render_setup_guide<'a>() -> Element<'a, Message> {
+    let heading = text("Welcome to Rho")
+        .size(22)
+        .font(FONT_INTER)
+        .color(color!(0x7aa2f7));
+
+    let subtitle = text("No API keys detected. Configure a provider to get started:")
+        .size(14)
+        .font(FONT_INTER)
+        .color(color!(0xa9b1d6));
+
+    let hint = text("After setting an env var, restart Rho. Models with valid keys appear highlighted in the sidebar.")
+        .size(12)
+        .font(FONT_INTER)
+        .color(color!(0x565f89));
+
+    container(
+        column![
+            heading,
+            subtitle,
+            setup_section(
+                "Anthropic (Claude)",
+                "export ANTHROPIC_API_KEY=sk-ant-...\n\nOr log in with Claude Code \u{2014} Rho reads its OAuth credentials automatically.",
+            ),
+            setup_section(
+                "OpenAI (GPT)",
+                "export OPENAI_API_KEY=sk-...",
+            ),
+            setup_section(
+                "xAI (Grok)",
+                "export XAI_API_KEY=xai-...",
+            ),
+            setup_section(
+                "Ollama (local, no key needed)",
+                "1. Install Ollama and pull a model:  ollama pull gemma2:9b\n2. Click Config in the sidebar, go to Models tab, and add:\n\n[[model]]\nid = \"ollama-gemma\"\nprovider = \"openai\"\nmodel_id = \"gemma2:9b\"\nbase_url = \"http://localhost:11434/v1\"\ncontext_window = 8192\nmax_tokens = 4096",
+            ),
+            hint,
+        ]
+        .spacing(12)
+        .width(Length::Fill),
+    )
+    .padding(8)
+    .width(Length::Fill)
+    .into()
+}
+
+fn setup_section<'a>(title: &'a str, body: &'a str) -> Element<'a, Message> {
+    container(
+        column![
+            text(title)
+                .size(14)
+                .font(FONT_MONO_BOLD)
+                .color(color!(0x9ece6a)),
+            text(body)
+                .size(13)
+                .font(FONT_MONO)
+                .color(color!(0xa9b1d6)),
+        ]
+        .spacing(6),
+    )
+    .padding(12)
+    .width(Length::Fill)
+    .style(|theme: &Theme| {
+        let palette = theme.extended_palette();
+        container::Style {
+            background: Some(palette.background.strong.color.into()),
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    })
+    .into()
 }
 
 // --- Block rendering ---

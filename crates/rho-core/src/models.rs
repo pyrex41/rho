@@ -111,6 +111,26 @@ impl ModelRegistry {
         &self.models
     }
 
+    /// Check which models have valid API keys available.
+    /// Returns (available, unavailable) model IDs.
+    pub fn check_availability(&self) -> (Vec<String>, Vec<String>) {
+        let mut available = Vec::new();
+        let mut unavailable = Vec::new();
+        for m in &self.models {
+            if Self::resolve_api_key(m).is_ok() {
+                available.push(m.id.clone());
+            } else {
+                unavailable.push(m.id.clone());
+            }
+        }
+        (available, unavailable)
+    }
+
+    /// Find the first model with a valid API key.
+    pub fn first_available(&self) -> Option<&ModelConfig> {
+        self.models.iter().find(|m| Self::resolve_api_key(m).is_ok())
+    }
+
     /// Convert a `ModelConfig` to the runtime `Model` type.
     pub fn to_model(config: &ModelConfig) -> crate::types::Model {
         crate::types::Model {

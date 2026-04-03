@@ -1,6 +1,6 @@
 [package]
 name = "rho-tools"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 description = "Built-in tools for the rho AI coding agent"
 license = "MIT"

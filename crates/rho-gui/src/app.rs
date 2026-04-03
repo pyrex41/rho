@@ -174,6 +174,8 @@ pub struct RhoApp {
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub session_start: Instant,
+    /// Model IDs that have valid API keys
+    pub available_model_ids: std::collections::HashSet<String>,
     // Settings panel
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
@@ -248,7 +250,7 @@ impl RhoApp {
         );
         let session_list = session_store.list_sessions(50).unwrap_or_default();
 
-        let model_id = project_config
+        let preferred_model_id = project_config
             .model
             .as_deref()
             .unwrap_or("claude-sonnet")
@@ -256,26 +258,40 @@ impl RhoApp {
         let thinking = project_config.thinking.unwrap_or(ThinkingLevel::Off);
 
         let model_registry = ModelRegistry::load();
-        let model_config = model_registry
-            .get(&model_id)
-            .cloned()
-            .unwrap_or_else(|| ModelConfig {
-                id: model_id.clone(),
-                provider: ProviderType::Anthropic,
-                model_id: model_id.clone(),
-                base_url: String::new(),
-                api_key_env: Some("ANTHROPIC_API_KEY".into()),
-                context_window: 200_000,
-                max_tokens: if thinking != ThinkingLevel::Off { 16_384 } else { 8_192 },
-                thinking: thinking != ThinkingLevel::Off,
-                server_tools: None,
-            });
+
+        // Try the preferred model first; if it has no API key, auto-select the first available model.
+        let model_config = {
+            let preferred = model_registry.get(&preferred_model_id).cloned();
+            let preferred_has_key = preferred
+                .as_ref()
+                .map(|m| ModelRegistry::resolve_api_key(m).is_ok())
+                .unwrap_or(false);
+
+            if preferred_has_key {
+                preferred.unwrap()
+            } else if let Some(first) = model_registry.first_available() {
+                first.clone()
+            } else {
+                // No models have keys — fall back to preferred (or synthesize default)
+                preferred.unwrap_or_else(|| ModelConfig {
+                    id: preferred_model_id.clone(),
+                    provider: ProviderType::Anthropic,
+                    model_id: preferred_model_id.clone(),
+                    base_url: String::new(),
+                    api_key_env: Some("ANTHROPIC_API_KEY".into()),
+                    context_window: 200_000,
+                    max_tokens: if thinking != ThinkingLevel::Off { 16_384 } else { 8_192 },
+                    thinking: thinking != ThinkingLevel::Off,
+                    server_tools: None,
+                })
+            }
+        };
         let model = ModelRegistry::to_model(&model_config);
 
         let event_handler_config = EventHandlerConfig {
             session_store: Some(session_store.clone()),
             session_id: None,
-            model_id: model_id.to_string(),
+            model_id: model_config.id.clone(),
             cwd: cwd.clone(),
         };
 
@@ -296,6 +312,10 @@ impl RhoApp {
         let api_key = ModelRegistry::resolve_api_key(&model_config)
             .ok()
             .or(initial_api_key);
+
+        // Check which models have valid API keys
+        let (available_ids, _) = model_registry.check_availability();
+        let available_model_ids: HashSet<String> = available_ids.into_iter().collect();
 
         let app = Self {
             messages: Vec::new(),
@@ -334,6 +354,7 @@ impl RhoApp {
             total_input_tokens: 0,
             total_output_tokens: 0,
             session_start: Instant::now(),
+            available_model_ids,
             settings_open: false,
             settings_tab: SettingsTab::Project,
             project_config_content: iced::widget::text_editor::Content::new(),
@@ -549,6 +570,7 @@ impl RhoApp {
                             self.model_config = config.clone();
                             self.model = ModelRegistry::to_model(&config);
                             self.api_key = Some(key);
+                            self.available_model_ids.insert(model_id.clone());
                             self.error = None;
                             let provider = match config.provider {
                                 ProviderType::Anthropic => "anthropic",
@@ -670,6 +692,8 @@ impl RhoApp {
                     match std::fs::write(&path, &text) {
                         Ok(()) => {
                             self.model_registry = ModelRegistry::load();
+                            let (available_ids, _) = self.model_registry.check_availability();
+                            self.available_model_ids = available_ids.into_iter().collect();
                             self.error = None;
                         }
                         Err(e) => {
