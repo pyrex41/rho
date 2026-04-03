@@ -98,9 +98,9 @@ TAG=$(echo "$RELEASE_JSON" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": 
 [ -z "$TAG" ] && error "Could not determine latest release tag"
 info "Latest release: ${TAG}"
 
-# Install CLI (required) and GUI (optional where available)
+# Install CLI and GUI (both required)
 install_binary "rho-cli" "rho-cli-${OS}-${ARCH_LABEL}" true
-install_binary "rho" "rho-${OS}-${ARCH_LABEL}" false
+install_binary "rho" "rho-${OS}-${ARCH_LABEL}" true
 
 # Check if install dir is in PATH
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
