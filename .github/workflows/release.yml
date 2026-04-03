@@ -160,9 +160,15 @@ jobs:
               asset_name=$(basename "$asset_dir")
               asset_file=$(find "$asset_dir" -type f | head -1)
               if [ -n "$asset_file" ]; then
-                echo "Uploading $asset_file as $asset_name"
-                cp "$asset_file" "./$asset_name"
-                gh release upload ${{ github.ref_name }} "./$asset_name" --clobber
+                # Preserve file extension (e.g. .zip for app bundles)
+                file_ext="${asset_file##*.}"
+                upload_name="$asset_name"
+                if [ "$file_ext" = "zip" ] && [[ "$asset_name" != *.zip ]]; then
+                  upload_name="${asset_name}.zip"
+                fi
+                echo "Uploading $asset_file as $upload_name"
+                cp "$asset_file" "./$upload_name"
+                gh release upload ${{ github.ref_name }} "./$upload_name" --clobber
               fi
             fi
           done

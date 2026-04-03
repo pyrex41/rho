@@ -106,21 +106,40 @@ install_macos_app() {
     wget -qO "${TMPDIR}/app.zip" "$DOWNLOAD_URL"
   fi
 
-  # Remove old installation if present
+  # Try user's ~/Applications first, fall back to /Applications with sudo
+  local APP_DIR="$HOME/Applications"
+  local NEED_SUDO=false
+
   if [ -d "/Applications/Rho.app" ]; then
-    info "Removing existing /Applications/Rho.app..."
-    rm -rf "/Applications/Rho.app"
+    # Already installed system-wide, update in place
+    APP_DIR="/Applications"
+    NEED_SUDO=true
   fi
 
-  info "Installing Rho.app to /Applications..."
-  unzip -q "${TMPDIR}/app.zip" -d /Applications
+  # Remove old installation if present
+  if [ -d "${APP_DIR}/Rho.app" ]; then
+    info "Removing existing ${APP_DIR}/Rho.app..."
+    if [ "$NEED_SUDO" = true ]; then
+      sudo rm -rf "${APP_DIR}/Rho.app"
+    else
+      rm -rf "${APP_DIR}/Rho.app"
+    fi
+  fi
+
+  mkdir -p "$APP_DIR"
+  info "Installing Rho.app to ${APP_DIR}..."
+  if [ "$NEED_SUDO" = true ]; then
+    sudo unzip -q "${TMPDIR}/app.zip" -d "$APP_DIR"
+  else
+    unzip -q "${TMPDIR}/app.zip" -d "$APP_DIR"
+  fi
 
   # Create symlink so 'rho' command still works from PATH
   mkdir -p "$INSTALL_DIR"
-  ln -sf /Applications/Rho.app/Contents/MacOS/rho "${INSTALL_DIR}/rho"
+  ln -sf "${APP_DIR}/Rho.app/Contents/MacOS/rho" "${INSTALL_DIR}/rho"
 
-  info "Installed Rho.app to /Applications"
-  info "Symlinked ${INSTALL_DIR}/rho -> /Applications/Rho.app/Contents/MacOS/rho"
+  info "Installed Rho.app to ${APP_DIR}"
+  info "Symlinked ${INSTALL_DIR}/rho -> ${APP_DIR}/Rho.app/Contents/MacOS/rho"
   rm -rf "$TMPDIR"
 }
 
