@@ -62,12 +62,14 @@ jobs:
             asset_name: rho-macos-x64
             use_cross: false
             build_args: "-p rho-gui"
+            macos_gui: true
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: rho
             asset_name: rho-macos-arm64
             use_cross: false
             build_args: "-p rho-gui"
+            macos_gui: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: rho.exe
@@ -101,11 +103,36 @@ jobs:
         if: "!matrix.use_cross"
         run: cargo build ${{ matrix.build_args }} --release --target ${{ matrix.target }}
 
+      - name: Install cargo-bundle
+        if: matrix.macos_gui
+        run: cargo install cargo-bundle
+
+      - name: Create macOS app bundle
+        if: matrix.macos_gui
+        run: cargo bundle --release --target ${{ matrix.target }}
+        working-directory: crates/rho-gui
+
+      - name: Codesign and zip app bundle
+        if: matrix.macos_gui
+        run: |
+          APP_PATH="target/${{ matrix.target }}/release/bundle/osx/Rho.app"
+          codesign --force --deep -s - "$APP_PATH"
+          ASSET_NAME="${{ matrix.asset_name }}-app"
+          cd "$(dirname "$APP_PATH")"
+          zip -r "$GITHUB_WORKSPACE/${ASSET_NAME}.zip" Rho.app
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
           path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+      - name: Upload app bundle
+        if: matrix.macos_gui
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}-app
+          path: ${{ matrix.asset_name }}-app.zip
 
   release:
     name: Create Release

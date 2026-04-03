@@ -83,6 +83,47 @@ install_binary() {
   rm -rf "$TMPDIR"
 }
 
+# Function to download and install macOS .app bundle
+install_macos_app() {
+  local asset_pattern="rho-${OS}-${ARCH_LABEL}-app.zip"
+
+  info "Looking for Rho.app bundle (${asset_pattern})..."
+
+  local DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep '"browser_download_url"' | grep "$asset_pattern" | grep -v '\.sha256' | head -1 | sed 's/.*"\(https[^"]*\)".*/\1/')
+
+  if [ -z "$DOWNLOAD_URL" ]; then
+    info "No .app bundle available, falling back to raw binary..."
+    install_binary "rho" "rho-${OS}-${ARCH_LABEL}" true
+    return 0
+  fi
+
+  info "Downloading ${DOWNLOAD_URL}..."
+
+  local TMPDIR=$(mktemp -d)
+  if command -v curl &>/dev/null; then
+    curl -fsSL -o "${TMPDIR}/app.zip" "$DOWNLOAD_URL"
+  else
+    wget -qO "${TMPDIR}/app.zip" "$DOWNLOAD_URL"
+  fi
+
+  # Remove old installation if present
+  if [ -d "/Applications/Rho.app" ]; then
+    info "Removing existing /Applications/Rho.app..."
+    rm -rf "/Applications/Rho.app"
+  fi
+
+  info "Installing Rho.app to /Applications..."
+  unzip -q "${TMPDIR}/app.zip" -d /Applications
+
+  # Create symlink so 'rho' command still works from PATH
+  mkdir -p "$INSTALL_DIR"
+  ln -sf /Applications/Rho.app/Contents/MacOS/rho "${INSTALL_DIR}/rho"
+
+  info "Installed Rho.app to /Applications"
+  info "Symlinked ${INSTALL_DIR}/rho -> /Applications/Rho.app/Contents/MacOS/rho"
+  rm -rf "$TMPDIR"
+}
+
 # Get latest release tag
 info "Fetching latest release..."
 RELEASE_URL="https://api.github.com/repos/${REPO}/releases/latest"
@@ -98,9 +139,15 @@ TAG=$(echo "$RELEASE_JSON" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": 
 [ -z "$TAG" ] && error "Could not determine latest release tag"
 info "Latest release: ${TAG}"
 
-# Install CLI and GUI (both required)
+# Install CLI (all platforms)
 install_binary "rho-cli" "rho-cli-${OS}-${ARCH_LABEL}" true
-install_binary "rho" "rho-${OS}-${ARCH_LABEL}" true
+
+# Install GUI
+if [ "$OS" = "macos" ]; then
+    install_macos_app
+else
+    install_binary "rho" "rho-${OS}-${ARCH_LABEL}" true
+fi
 
 # Check if install dir is in PATH
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
