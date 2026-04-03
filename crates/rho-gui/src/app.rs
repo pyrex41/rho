@@ -181,6 +181,10 @@ pub struct RhoApp {
     pub settings_tab: SettingsTab,
     pub project_config_content: iced::widget::text_editor::Content,
     pub models_config_content: iced::widget::text_editor::Content,
+    // Sidebar
+    pub sidebar_width: f32,
+    pub sidebar_dragging: bool,
+    pub collapsed_providers: HashSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -208,6 +212,10 @@ pub enum Message {
     NewSession,
     DeleteSession(String),
     SwitchModel(String),
+    ToggleProvider(String),
+    SidebarResizeStart,
+    SidebarResize(f32),
+    SidebarResizeEnd,
     // Settings
     OpenSettings,
     CloseSettings,
@@ -359,6 +367,9 @@ impl RhoApp {
             settings_tab: SettingsTab::Project,
             project_config_content: iced::widget::text_editor::Content::new(),
             models_config_content: iced::widget::text_editor::Content::new(),
+            sidebar_width: 220.0,
+            sidebar_dragging: false,
+            collapsed_providers: HashSet::new(),
         };
 
         (app, IcedTask::none())
@@ -591,6 +602,26 @@ impl RhoApp {
                 } else {
                     self.error = Some(format!("Unknown model: '{}'", model_id));
                 }
+                IcedTask::none()
+            }
+            Message::ToggleProvider(provider) => {
+                if !self.collapsed_providers.remove(&provider) {
+                    self.collapsed_providers.insert(provider);
+                }
+                IcedTask::none()
+            }
+            Message::SidebarResizeStart => {
+                self.sidebar_dragging = true;
+                IcedTask::none()
+            }
+            Message::SidebarResize(x) => {
+                if self.sidebar_dragging {
+                    self.sidebar_width = x.clamp(140.0, 400.0);
+                }
+                IcedTask::none()
+            }
+            Message::SidebarResizeEnd => {
+                self.sidebar_dragging = false;
                 IcedTask::none()
             }
             Message::OpenSettings => {
@@ -1177,10 +1208,14 @@ impl RhoApp {
 }
 
 pub fn subscription(_app: &RhoApp) -> Subscription<Message> {
-    // Use event::listen_with to see ALL keyboard events, even those
-    // captured by text_input (e.g. Tab). Always active for history support.
     event::listen_with(|event, _status, _window| match event {
         iced::Event::Keyboard(kb_event) => Some(Message::KeyEvent(kb_event)),
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+            Some(Message::SidebarResizeEnd)
+        }
+        iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            Some(Message::SidebarResize(position.x))
+        }
         _ => None,
     })
 }

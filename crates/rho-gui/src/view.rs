@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::Ordering;
 
 use iced::widget::{
-    button, column, container, markdown, progress_bar, row, scrollable, text, text_editor,
-    text_input, Column,
+    button, column, container, markdown, mouse_area, progress_bar, row, scrollable, text,
+    text_editor, text_input, Column,
 };
 use iced::{color, Element, Font, Length, Theme};
 
@@ -34,7 +34,28 @@ pub fn view(app: &RhoApp) -> Element<'_, Message> {
     } else {
         render_chat(app)
     };
-    row![sidebar, main].into()
+
+    // Drag handle for sidebar resize — wider hit area with visible center line
+    let drag_handle = mouse_area(
+        container(
+            container(iced::widget::Space::new().width(2).height(Length::Fill))
+                .style(|_theme: &Theme| container::Style {
+                    background: Some(color!(0x565f89).into()),
+                    ..Default::default()
+                }),
+        )
+        .width(8)
+        .height(Length::Fill)
+        .center_x(8)
+        .style(|_theme: &Theme| container::Style {
+            background: Some(color!(0x1a1b26).into()),
+            ..Default::default()
+        }),
+    )
+    .on_press(Message::SidebarResizeStart)
+    .interaction(iced::mouse::Interaction::ResizingColumn);
+
+    row![sidebar, drag_handle, main].into()
 }
 
 pub fn theme(_app: &RhoApp) -> Theme {
@@ -54,7 +75,8 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
     let mins = elapsed.as_secs() / 60;
     let secs = elapsed.as_secs() % 60;
 
-    let mut col = Column::new().spacing(16).padding(16).width(220);
+    let sidebar_w = app.sidebar_width;
+    let mut col = Column::new().spacing(16).padding(16).width(sidebar_w);
 
     // Project + config button
     let cfg_label = if app.settings_open { "✕ Close" } else { "⚙ Config" };
@@ -80,54 +102,64 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         )
         .push(text(dir_name).size(14));
 
-    // Model picker — available models first, then unavailable dimmed
-    col = col.push(text("MODEL").size(11).color(color!(0x565f89)));
+    // Model picker — grouped by provider, collapsible
+    col = col.push(text("MODELS").size(11).color(color!(0x565f89)));
 
     let all_models = app.model_registry.list();
-    let has_any_available = all_models.iter().any(|m| app.available_model_ids.contains(&m.id));
-
-    // Available models
-    for m in all_models.iter().filter(|m| app.available_model_ids.contains(&m.id)) {
-        let is_current = m.id == app.model_config.id;
-        let label = if is_current {
-            format!("▶ {}", m.id)
-        } else {
-            format!("  {}", m.id)
-        };
-        let color = if is_current {
-            color!(0x7aa2f7)
-        } else {
-            color!(0xa9b1d6)
-        };
-        let model_id = m.id.clone();
-        col = col.push(
-            button(text(label).size(13).color(color))
-                .style(|_theme, _status| button::Style {
-                    background: None,
-                    ..Default::default()
-                })
-                .on_press(Message::SwitchModel(model_id))
-                .padding([0, 0]),
-        );
+    // Group models by API endpoint domain
+    let mut by_provider: BTreeMap<String, Vec<&rho_core::models::ModelConfig>> = BTreeMap::new();
+    for m in all_models {
+        let label = model_group_label(m);
+        by_provider.entry(label).or_default().push(m);
     }
 
-    // Unavailable models (dimmed, with hint)
-    let unavailable: Vec<_> = all_models.iter().filter(|m| !app.available_model_ids.contains(&m.id)).collect();
-    if !unavailable.is_empty() {
-        if has_any_available {
-            col = col.push(text("  ─── no key ───").size(10).color(color!(0x3b4261)));
-        }
-        for m in unavailable {
-            let model_id = m.id.clone();
-            col = col.push(
-                button(text(format!("  {}", m.id)).size(12).color(color!(0x3b4261)))
-                    .style(|_theme, _status| button::Style {
-                        background: None,
-                        ..Default::default()
-                    })
-                    .on_press(Message::SwitchModel(model_id))
-                    .padding([0, 0]),
-            );
+    let max_id_len = (sidebar_w as usize).saturating_sub(60) / 7; // approx chars that fit
+
+    for (provider, models) in &by_provider {
+        let collapsed = app.collapsed_providers.contains(provider);
+        let arrow = if collapsed { "▸" } else { "▾" };
+        let avail_count = models.iter().filter(|m| app.available_model_ids.contains(&m.id)).count();
+        let header_label = format!("{arrow} {provider}  ({avail_count}/{})", models.len());
+        let provider_clone = provider.clone();
+        let header_btn = button(
+            text(header_label).size(11).color(color!(0x7aa2f7)),
+        )
+        .on_press(Message::ToggleProvider(provider_clone))
+        .width(Length::Fill)
+        .padding([2, 0])
+        .style(|_theme, _status| button::Style {
+            background: None,
+            ..Default::default()
+        });
+        col = col.push(header_btn);
+
+        if !collapsed {
+            for m in models {
+                let is_current = m.id == app.model_config.id;
+                let available = app.available_model_ids.contains(&m.id);
+                let label = if is_current {
+                    format!("  ▶ {}", truncate_sidebar_text(&m.id, max_id_len))
+                } else {
+                    format!("    {}", truncate_sidebar_text(&m.id, max_id_len))
+                };
+                let color = if is_current {
+                    color!(0x7aa2f7)
+                } else if available {
+                    color!(0xa9b1d6)
+                } else {
+                    color!(0x3b4261)
+                };
+                let model_id = m.id.clone();
+                col = col.push(
+                    button(text(label).size(12).color(color))
+                        .style(|_theme, _status| button::Style {
+                            background: None,
+                            ..Default::default()
+                        })
+                        .on_press(Message::SwitchModel(model_id))
+                        .padding([1, 0]),
+                );
+            }
         }
     }
 
@@ -358,7 +390,8 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
             .push(text(err.as_str()).size(12).color(color!(0xf7768e)));
     }
 
-    container(col)
+    container(scrollable(col).height(Length::Fill))
+        .width(sidebar_w)
         .height(Length::Fill)
         .style(|theme: &Theme| {
             let palette = theme.extended_palette();
@@ -368,6 +401,28 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
             }
         })
         .into()
+}
+
+fn model_group_label(m: &rho_core::models::ModelConfig) -> String {
+    if m.base_url.is_empty() {
+        // No base_url means provider default
+        return match m.provider {
+            rho_core::models::ProviderType::Anthropic => "Anthropic".into(),
+            rho_core::models::ProviderType::OpenAi => "OpenAI".into(),
+            rho_core::models::ProviderType::XaiResponses => "xAI".into(),
+        };
+    }
+    // Group by domain from base_url
+    if let Some(host) = m.base_url.split("//").nth(1).and_then(|s| s.split('/').next()) {
+        match host {
+            "api.anthropic.com" => "Anthropic".into(),
+            "api.openai.com" => "OpenAI".into(),
+            "api.x.ai" => "xAI".into(),
+            _ => host.to_string(),
+        }
+    } else {
+        "Other".into()
+    }
 }
 
 fn truncate_sidebar_text(s: &str, max: usize) -> String {
