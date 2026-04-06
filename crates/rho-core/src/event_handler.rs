@@ -56,7 +56,13 @@ fn extract_title(messages: &[Message]) -> String {
             }
             let first_line = trimmed.lines().next().unwrap_or(trimmed);
             if first_line.len() > 80 {
-                return format!("{}...", &first_line[..77]);
+                let end = first_line
+                    .char_indices()
+                    .map(|(i, _)| i)
+                    .take_while(|&i| i <= 77)
+                    .last()
+                    .unwrap_or(0);
+                return format!("{}...", &first_line[..end]);
             }
             return first_line.to_string();
         }
