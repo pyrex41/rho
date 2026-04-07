@@ -35,7 +35,7 @@ impl OutputFormat {
 }
 
 #[derive(Parser)]
-#[command(name = "rho", about = "AI coding agent with file tools")]
+#[command(name = "rho", about = "AI coding agent with file tools", subcommand_precedence_over_arg = true)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
