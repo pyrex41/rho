@@ -232,6 +232,22 @@ enum Commands {
         #[arg(long, default_value = "text")]
         output_format: String,
     },
+    /// Manage local models (setup, list)
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ModelsCommands {
+    /// Set up a local model via Ollama
+    Setup {
+        /// Model to set up (e.g. "gemma-4-e4b"). Omit to see available models.
+        model: Option<String>,
+    },
+    /// List all registered models and their availability
+    List,
 }
 
 fn now_ms() -> u64 {
@@ -1020,6 +1036,114 @@ async fn main() -> Result<()> {
             };
 
             autoresearch::run_autoresearch(ar_config, cancel).await?;
+        }
+        Some(Commands::Models { command }) => {
+            match command {
+                ModelsCommands::List => {
+                    let registry = ModelRegistry::load();
+                    let models = registry.list();
+                    eprintln!("{:<24} {:<16} {:<32} {}", "ID", "PROVIDER", "MODEL ID", "STATUS");
+                    eprintln!("{}", "-".repeat(90));
+                    for m in models {
+                        let status = if ModelRegistry::resolve_api_key(m).is_ok() {
+                            "\x1b[32mavailable\x1b[0m"
+                        } else {
+                            "\x1b[31mno key\x1b[0m"
+                        };
+                        let provider = match m.provider {
+                            ProviderType::Anthropic => "anthropic",
+                            ProviderType::OpenAi => "openai",
+                            ProviderType::XaiResponses => "xai-responses",
+                        };
+                        eprintln!("{:<24} {:<16} {:<32} {}", m.id, provider, m.model_id, status);
+                    }
+                }
+                ModelsCommands::Setup { model } => {
+                    use rho_core::models::{local_model_catalog, LocalModelTemplate};
+
+                    let catalog = local_model_catalog();
+
+                    let template: LocalModelTemplate = match model {
+                        Some(ref name) => {
+                            match catalog.iter().find(|t| t.id == name || t.ollama_tag == name) {
+                                Some(t) => t.clone(),
+                                None => {
+                                    eprintln!("Unknown model '{}'. Available models:", name);
+                                    for t in &catalog {
+                                        eprintln!("  {:<20} {}", t.id, t.display_name);
+                                    }
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+                        None => {
+                            eprintln!("Available local models (all fit 24–34 GB Apple Silicon):\n");
+                            eprintln!("  {:<28} {:<10} {}", "ID", "SIZE", "DESCRIPTION");
+                            eprintln!("  {}", "-".repeat(72));
+                            for t in &catalog {
+                                eprintln!("  {:<28} {:<10} {}", t.id, t.size_hint, t.display_name);
+                            }
+                            eprintln!("\nUsage: rho models setup <model-id>");
+                            eprintln!("Example: rho models setup gemma-4-e4b");
+                            std::process::exit(0);
+                        }
+                    };
+
+                    // Check Ollama is available
+                    eprintln!("Setting up {} via Ollama...\n", template.display_name);
+
+                    let ollama_check = std::process::Command::new("ollama")
+                        .arg("--version")
+                        .output();
+                    match ollama_check {
+                        Ok(out) if out.status.success() => {
+                            let ver = String::from_utf8_lossy(&out.stdout);
+                            eprintln!("  Ollama: {}", ver.trim());
+                        }
+                        _ => {
+                            eprintln!("Error: Ollama is not installed.");
+                            eprintln!("Install it from https://ollama.com/download");
+                            std::process::exit(1);
+                        }
+                    }
+
+                    // Pull the model
+                    eprintln!("  Pulling {} ({}), this may take a while...\n",
+                        template.ollama_tag, template.size_hint);
+
+                    let pull_status = std::process::Command::new("ollama")
+                        .args(["pull", template.ollama_tag])
+                        .status();
+                    match pull_status {
+                        Ok(s) if s.success() => {
+                            eprintln!("\n  Pull complete.");
+                        }
+                        Ok(s) => {
+                            eprintln!("\n  Ollama pull failed (exit {}).", s.code().unwrap_or(-1));
+                            eprintln!("  Make sure Ollama is running: ollama serve");
+                            std::process::exit(1);
+                        }
+                        Err(e) => {
+                            eprintln!("\n  Failed to run ollama: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+
+                    // Write to ~/.rho/models.toml
+                    let config = template.to_model_config();
+                    match ModelRegistry::save_model_to_config(&config) {
+                        Ok(()) => {
+                            eprintln!("  Added '{}' to ~/.rho/models.toml\n", template.id);
+                            eprintln!("You can now use it with:");
+                            eprintln!("  rho --model {} \"your prompt\"", template.id);
+                        }
+                        Err(e) => {
+                            eprintln!("  Failed to save config: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
         }
         None => {
             // Single-shot mode

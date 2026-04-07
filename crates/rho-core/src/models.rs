@@ -148,6 +148,34 @@ impl ModelRegistry {
         }
     }
 
+    /// Add or update a model in `~/.rho/models.toml`.
+    pub fn save_model_to_config(config: &ModelConfig) -> Result<(), String> {
+        let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+        let dir = home.join(".rho");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create ~/.rho: {e}"))?;
+        let path = dir.join("models.toml");
+
+        let mut file: ModelsFile = if path.is_file() {
+            let content =
+                std::fs::read_to_string(&path).map_err(|e| format!("Failed to read: {e}"))?;
+            toml::from_str(&content).map_err(|e| format!("Failed to parse: {e}"))?
+        } else {
+            ModelsFile {
+                models: Vec::new(),
+            }
+        };
+
+        if let Some(existing) = file.models.iter_mut().find(|m| m.id == config.id) {
+            *existing = config.clone();
+        } else {
+            file.models.push(config.clone());
+        }
+
+        let content = toml::to_string_pretty(&file).map_err(|e| format!("Failed to serialize: {e}"))?;
+        std::fs::write(&path, content).map_err(|e| format!("Failed to write: {e}"))?;
+        Ok(())
+    }
+
     /// Resolve the API key for a model config.
     ///
     /// Resolution order:
@@ -410,6 +438,199 @@ fn built_in_models() -> Vec<ModelConfig> {
             server_tools: None,
         },
 
+    ]
+}
+
+/// A local model template available for scaffolding via `rho models setup`.
+#[derive(Debug, Clone)]
+pub struct LocalModelTemplate {
+    /// User-facing ID in rho (e.g. "gemma-4-e4b")
+    pub id: &'static str,
+    /// Display name for the setup menu
+    pub display_name: &'static str,
+    /// Ollama model tag (e.g. "gemma4:e4b")
+    pub ollama_tag: &'static str,
+    /// Context window size
+    pub context_window: usize,
+    /// Max output tokens
+    pub max_tokens: usize,
+    /// Approximate download size
+    pub size_hint: &'static str,
+}
+
+impl LocalModelTemplate {
+    pub fn to_model_config(&self) -> ModelConfig {
+        ModelConfig {
+            id: self.id.into(),
+            provider: ProviderType::OpenAi,
+            model_id: self.ollama_tag.into(),
+            base_url: "http://localhost:11434/v1".into(),
+            api_key_env: None,
+            context_window: self.context_window,
+            max_tokens: self.max_tokens,
+            thinking: false,
+            server_tools: None,
+        }
+    }
+}
+
+/// Catalog of known local models that can be set up via Ollama.
+/// All models here fit in 24–34 GB unified memory (Apple Silicon).
+pub fn local_model_catalog() -> Vec<LocalModelTemplate> {
+    vec![
+        // --- Google Gemma 4 ---
+        LocalModelTemplate {
+            id: "gemma-4-e2b",
+            display_name: "Gemma 4 E2B — 2B, lightweight",
+            ollama_tag: "gemma4:e2b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~1.8 GB",
+        },
+        LocalModelTemplate {
+            id: "gemma-4-e4b",
+            display_name: "Gemma 4 E4B — 4B, balanced",
+            ollama_tag: "gemma4:e4b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~3.3 GB",
+        },
+        LocalModelTemplate {
+            id: "gemma-4-27b",
+            display_name: "Gemma 4 27B — 27B, high capability",
+            ollama_tag: "gemma4:27b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~17 GB",
+        },
+        // --- Meta Llama 4 ---
+        LocalModelTemplate {
+            id: "llama-4-scout",
+            display_name: "Llama 4 Scout — 17B active (MoE), strong general",
+            ollama_tag: "llama4:scout",
+            context_window: 512_000,
+            max_tokens: 8_192,
+            size_hint: "~30 GB",
+        },
+        // --- Meta Llama 3 ---
+        LocalModelTemplate {
+            id: "llama-3.3-70b",
+            display_name: "Llama 3.3 70B — large, Q4 fits ~34 GB",
+            ollama_tag: "llama3.3:70b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~34 GB",
+        },
+        LocalModelTemplate {
+            id: "llama-3.2-3b",
+            display_name: "Llama 3.2 3B — tiny, fast",
+            ollama_tag: "llama3.2:3b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~2.0 GB",
+        },
+        // --- Qwen 3 ---
+        LocalModelTemplate {
+            id: "qwen-3-32b",
+            display_name: "Qwen 3 32B — strong reasoning + tool use",
+            ollama_tag: "qwen3:32b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~20 GB",
+        },
+        LocalModelTemplate {
+            id: "qwen-3-8b",
+            display_name: "Qwen 3 8B — fast, good coding",
+            ollama_tag: "qwen3:8b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~5.2 GB",
+        },
+        LocalModelTemplate {
+            id: "qwen-3-4b",
+            display_name: "Qwen 3 4B — lightweight",
+            ollama_tag: "qwen3:4b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~2.6 GB",
+        },
+        // --- Qwen 2.5 Coder ---
+        LocalModelTemplate {
+            id: "qwen-2.5-coder-32b",
+            display_name: "Qwen 2.5 Coder 32B — top-tier code model",
+            ollama_tag: "qwen2.5-coder:32b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~20 GB",
+        },
+        LocalModelTemplate {
+            id: "qwen-2.5-coder-7b",
+            display_name: "Qwen 2.5 Coder 7B — fast code model",
+            ollama_tag: "qwen2.5-coder:7b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~4.7 GB",
+        },
+        // --- DeepSeek ---
+        LocalModelTemplate {
+            id: "deepseek-r1-32b",
+            display_name: "DeepSeek R1 32B — reasoning, chain-of-thought",
+            ollama_tag: "deepseek-r1:32b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~20 GB",
+        },
+        LocalModelTemplate {
+            id: "deepseek-r1-8b",
+            display_name: "DeepSeek R1 8B — compact reasoning",
+            ollama_tag: "deepseek-r1:8b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~4.9 GB",
+        },
+        LocalModelTemplate {
+            id: "devstral",
+            display_name: "Devstral — 24B, Mistral's coding agent model",
+            ollama_tag: "devstral",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~15 GB",
+        },
+        // --- Microsoft Phi ---
+        LocalModelTemplate {
+            id: "phi-4-14b",
+            display_name: "Phi 4 14B — efficient, strong at code",
+            ollama_tag: "phi4:14b",
+            context_window: 16_000,
+            max_tokens: 4_096,
+            size_hint: "~9.1 GB",
+        },
+        // --- Mistral ---
+        LocalModelTemplate {
+            id: "mistral-small-24b",
+            display_name: "Mistral Small 24B — balanced general + code",
+            ollama_tag: "mistral-small:24b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~15 GB",
+        },
+        LocalModelTemplate {
+            id: "mistral-nemo-12b",
+            display_name: "Mistral Nemo 12B — compact, versatile",
+            ollama_tag: "mistral-nemo:12b",
+            context_window: 128_000,
+            max_tokens: 8_192,
+            size_hint: "~7.1 GB",
+        },
+        // --- Codestral ---
+        LocalModelTemplate {
+            id: "codestral-22b",
+            display_name: "Codestral 22B — Mistral's dedicated code model",
+            ollama_tag: "codestral:22b",
+            context_window: 32_000,
+            max_tokens: 8_192,
+            size_hint: "~13 GB",
+        },
     ]
 }
 

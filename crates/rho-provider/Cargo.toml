@@ -1,6 +1,6 @@
 [package]
 name = "rho-provider"
-version = "0.7.5"
+version = "0.7.6"
 edition = "2021"
 description = "LLM provider implementations for rho (Anthropic, OpenAI)"
 license = "MIT"
