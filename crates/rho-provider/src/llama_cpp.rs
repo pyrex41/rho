@@ -426,6 +426,9 @@ fn spawn_llama_server(
     if let Some(ngl) = opts.n_gpu_layers {
         cmd.arg("--n-gpu-layers").arg(ngl.to_string());
     }
+    if let Some(p) = opts.parallel {
+        cmd.arg("--parallel").arg(p.to_string());
+    }
     for extra in &opts.extra_args {
         cmd.arg(extra);
     }

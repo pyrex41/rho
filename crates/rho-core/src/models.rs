@@ -61,6 +61,12 @@ pub struct LlamaCppOptions {
     /// GPU offload layers via `--n-gpu-layers`. 999 = all.
     #[serde(default)]
     pub n_gpu_layers: Option<u32>,
+    /// Number of parallel slots passed as `--parallel`. Each slot is an
+    /// independent KV-cache context; N requests execute concurrently.
+    /// Effective per-slot context = ctx_size / parallel, so bump ctx_size
+    /// accordingly. Default (None) = llama-server default (1 slot, serial).
+    #[serde(default)]
+    pub parallel: Option<u32>,
     /// Extra raw args appended to the llama-server command line.
     #[serde(default)]
     pub extra_args: Vec<String>,
