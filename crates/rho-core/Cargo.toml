@@ -1,6 +1,6 @@
 [package]
 name = "rho-core"
-version = "0.7.6"
+version = "0.8.0"
 edition = "2021"
 description = "Core types and agent loop for the rho AI coding agent"
 license = "MIT"

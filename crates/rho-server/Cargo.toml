@@ -1,15 +1,15 @@
 [package]
 name = "rho-server"
-version = "0.7.6"
+version = "0.8.0"
 edition = "2021"
 description = "HTTP server mode for the rho AI coding agent"
 license = "MIT"
 repository = "https://github.com/pyrex41/rho"
 
 [dependencies]
-rho-core = { version = "0.7.0", path = "../rho-core" }
-rho-provider = { version = "0.7.0", path = "../rho-provider" }
-rho-tools = { version = "0.7.0", path = "../rho-tools" }
+rho-core = { version = "0.8.0", path = "../rho-core" }
+rho-provider = { version = "0.8.0", path = "../rho-provider" }
+rho-tools = { version = "0.8.0", path = "../rho-tools" }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
 tokio = { workspace = true }
