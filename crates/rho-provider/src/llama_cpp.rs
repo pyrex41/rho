@@ -213,20 +213,44 @@ impl LlamaCppManager {
         Ok(out)
     }
 
-    /// Send SIGTERM to the server for `id` and clean up its lockfile.
+    /// Send SIGTERM to the server for `id`, wait up to ~5s for it to exit
+    /// (escalating to SIGKILL if it doesn't), then remove the lockfile.
     /// Returns Ok(true) if a live process was signalled, Ok(false) if there
     /// was no running server for that id.
+    ///
+    /// Waiting for actual exit before removing the lockfile matters because
+    /// llama-server takes ~1–3s to unload weights and release GPU memory.
+    /// If we removed the lockfile immediately and the user started a second
+    /// model, we'd briefly have two servers competing for VRAM.
     pub fn stop(id: &str) -> Result<bool> {
         let lock_path = run_dir()?.join(format!("{}.lock", sanitize(id)));
         let Some(lf) = read_lockfile(&lock_path)? else {
             return Ok(false);
         };
-        let alive = pid_alive(lf.pid);
-        if alive {
-            send_sigterm(lf.pid);
+        if !pid_alive(lf.pid) {
+            // Stale lockfile from a crashed process — just clean it up.
+            std::fs::remove_file(&lock_path).ok();
+            return Ok(false);
         }
+
+        send_sigterm(lf.pid);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if !pid_alive(lf.pid) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        if pid_alive(lf.pid) {
+            send_sigkill(lf.pid);
+            // Short grace period after KILL so wait4() has a chance to reap.
+            std::thread::sleep(Duration::from_millis(200));
+        }
+
         std::fs::remove_file(&lock_path).ok();
-        Ok(alive)
+        Ok(true)
     }
 
     /// Stop every running llama-server; returns the ids actually signalled.
@@ -316,6 +340,16 @@ fn send_sigterm(pid: u32) {
 
 #[cfg(not(unix))]
 fn send_sigterm(_pid: u32) {}
+
+#[cfg(unix)]
+fn send_sigkill(pid: u32) {
+    unsafe {
+        libc::kill(pid as i32, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn send_sigkill(_pid: u32) {}
 
 fn pick_free_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0").context("bind 127.0.0.1:0")?;
