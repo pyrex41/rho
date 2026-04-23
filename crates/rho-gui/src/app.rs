@@ -291,6 +291,7 @@ impl RhoApp {
                     max_tokens: if thinking != ThinkingLevel::Off { 16_384 } else { 8_192 },
                     thinking: thinking != ThinkingLevel::Off,
                     server_tools: None,
+                    llama_cpp: None,
                 })
             }
         };
@@ -587,6 +588,7 @@ impl RhoApp {
                                 ProviderType::Anthropic => "anthropic",
                                 ProviderType::OpenAi => "openai",
                                 ProviderType::XaiResponses => "xai-responses",
+                                ProviderType::LlamaCpp => "llama-cpp",
                             };
                             let msg = format!("Switched to **{}** ({})", model_id, provider);
                             self.messages.push(ConversationBlock::AssistantMarkdown {
@@ -834,6 +836,7 @@ impl RhoApp {
                             ProviderType::Anthropic => "anthropic",
                             ProviderType::OpenAi => "openai",
                             ProviderType::XaiResponses => "xai-responses",
+                            ProviderType::LlamaCpp => "llama-cpp",
                         };
                         let current = if m.id == self.model_config.id { " ◀ current" } else { "" };
                         format!("- **{}** ({}){}  ", m.id, provider, current)

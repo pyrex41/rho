@@ -17,6 +17,7 @@ use rho_core::types::*;
 use rho_core::session::SessionStore;
 
 mod autoresearch;
+mod llama_ux;
 mod loop_runner;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -248,6 +249,21 @@ enum ModelsCommands {
     },
     /// List all registered models and their availability
     List,
+    /// List running llama.cpp servers (managed by rho)
+    Running,
+    /// Stop a running llama.cpp server
+    Stop {
+        /// Model id to stop (as defined in ~/.rho/models.toml)
+        id: Option<String>,
+        /// Stop every running llama.cpp server
+        #[arg(long)]
+        all: bool,
+    },
+    /// Pre-spawn a llama.cpp server (warmup) without running an agent
+    Warmup {
+        /// Model id to warm up
+        id: String,
+    },
 }
 
 fn now_ms() -> u64 {
@@ -255,6 +271,19 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64
+}
+
+fn format_uptime(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m{}s", secs / 60, secs % 60)
+    } else if secs < 86_400 {
+        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    } else {
+        format!("{}d{}h", secs / 86_400, (secs % 86_400) / 3600)
+    }
 }
 
 fn parse_thinking(s: &str) -> ThinkingLevel {
@@ -351,6 +380,7 @@ fn resolve_model_config(
             },
             thinking: model_id.contains("opus") || thinking != ThinkingLevel::Off,
             server_tools: None,
+            llama_cpp: None,
         };
     }
 
@@ -390,6 +420,7 @@ fn resolve_model_config(
         },
         thinking: model_arg.contains("opus") || thinking != ThinkingLevel::Off,
         server_tools: None,
+        llama_cpp: None,
     }
 }
 
@@ -803,6 +834,7 @@ async fn main() -> Result<()> {
 
             let registry = ModelRegistry::load();
             let model_config = resolve_model_config(&model_id, &registry, thinking_level);
+            let model_config = llama_ux::prepare_with_ux(model_config).await?;
 
             let resolved_api_key = match api_key {
                 Some(key) => key,
@@ -860,6 +892,7 @@ async fn main() -> Result<()> {
 
             let registry = ModelRegistry::load();
             let model_config = resolve_model_config(&model_id, &registry, thinking_level);
+            let model_config = llama_ux::prepare_with_ux(model_config).await?;
 
             let api_key = match api_key {
                 Some(key) => key,
@@ -962,6 +995,7 @@ async fn main() -> Result<()> {
 
             let registry = ModelRegistry::load();
             let model_config = resolve_model_config(&model_id, &registry, thinking_level);
+            let model_config = llama_ux::prepare_with_ux(model_config).await?;
 
             let api_key = match api_key {
                 Some(key) => key,
@@ -1054,6 +1088,7 @@ async fn main() -> Result<()> {
                             ProviderType::Anthropic => "anthropic",
                             ProviderType::OpenAi => "openai",
                             ProviderType::XaiResponses => "xai-responses",
+                            ProviderType::LlamaCpp => "llama-cpp",
                         };
                         eprintln!("{:<24} {:<16} {:<32} {}", m.id, provider, m.model_id, status);
                     }
@@ -1143,6 +1178,75 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+                ModelsCommands::Running => {
+                    use rho_provider::llama_cpp::LlamaCppManager;
+                    let running = LlamaCppManager::list_running()
+                        .context("failed to scan ~/.rho/run")?;
+                    if running.is_empty() {
+                        eprintln!("No llama.cpp servers are currently running.");
+                    } else {
+                        eprintln!(
+                            "{:<24} {:<8} {:<8} {:<14} {}",
+                            "ID", "PORT", "PID", "UPTIME", "GGUF"
+                        );
+                        eprintln!("{}", "-".repeat(96));
+                        for m in running {
+                            let uptime = SystemTime::now()
+                                .duration_since(m.started_at)
+                                .unwrap_or_default();
+                            eprintln!(
+                                "{:<24} {:<8} {:<8} {:<14} {}",
+                                m.id,
+                                m.port,
+                                m.pid,
+                                format_uptime(uptime),
+                                m.gguf_path.display()
+                            );
+                        }
+                    }
+                }
+                ModelsCommands::Stop { id, all } => {
+                    use rho_provider::llama_cpp::LlamaCppManager;
+                    if all {
+                        let stopped = LlamaCppManager::stop_all()
+                            .context("failed to stop all llama.cpp servers")?;
+                        if stopped.is_empty() {
+                            eprintln!("No running servers to stop.");
+                        } else {
+                            for id in &stopped {
+                                eprintln!("\x1b[32m✓\x1b[0m Stopped {}", id);
+                            }
+                        }
+                    } else if let Some(id) = id {
+                        match LlamaCppManager::stop(&id)
+                            .with_context(|| format!("failed to stop {}", id))?
+                        {
+                            true => eprintln!("\x1b[32m✓\x1b[0m Stopped {}", id),
+                            false => eprintln!("No running server for '{}'.", id),
+                        }
+                    } else {
+                        eprintln!("Specify a model id or --all");
+                        std::process::exit(2);
+                    }
+                }
+                ModelsCommands::Warmup { id } => {
+                    let registry = ModelRegistry::load();
+                    let config = registry
+                        .get(&id)
+                        .with_context(|| format!("model '{}' not in ~/.rho/models.toml", id))?
+                        .clone();
+                    if config.provider != ProviderType::LlamaCpp {
+                        anyhow::bail!(
+                            "model '{}' is not a llama-cpp model (provider={:?}); warmup \
+                             only applies to llama-cpp",
+                            id,
+                            config.provider
+                        );
+                    }
+                    // Goes through the same UX layer as agent calls — spinner on
+                    // fresh spawn, cache-hit line if already running.
+                    let _ = llama_ux::prepare_with_ux(config).await?;
+                }
             }
         }
         None => {
@@ -1178,6 +1282,7 @@ async fn main() -> Result<()> {
 
             let registry = ModelRegistry::load();
             let model_config = resolve_model_config(&model_id, &registry, thinking);
+            let model_config = llama_ux::prepare_with_ux(model_config).await?;
 
             let api_key = match &cli.api_key {
                 Some(key) => key.clone(),

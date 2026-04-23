@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -8,6 +9,8 @@ pub enum ProviderType {
     OpenAi,
     #[serde(alias = "xai-responses")]
     XaiResponses,
+    #[serde(alias = "llama-cpp", alias = "llama.cpp", alias = "llamacpp")]
+    LlamaCpp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +36,34 @@ pub struct ModelConfig {
     /// These are not executed locally — they run on the provider's servers.
     #[serde(default)]
     pub server_tools: Option<Vec<String>>,
+    /// llama.cpp server lifecycle options. Only meaningful when `provider = LlamaCpp`.
+    #[serde(default)]
+    pub llama_cpp: Option<LlamaCppOptions>,
+}
+
+/// Local llama.cpp server configuration. Consumed by rho-provider's LlamaCppManager.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LlamaCppOptions {
+    /// Path to a local GGUF file. Takes precedence over `hf_repo`.
+    #[serde(default)]
+    pub gguf_path: Option<PathBuf>,
+    /// Hugging Face repo for auto-download (e.g. "google/gemma-4-12b-it-GGUF").
+    /// Used when `gguf_path` is not set. Downloads to ~/.rho/models/<slug>/.
+    #[serde(default)]
+    pub hf_repo: Option<String>,
+    /// Quant suffix hint for `hf_repo` (e.g. "Q4_K_M", "Q5_K_M", "Q8_0").
+    /// Case-insensitive substring match on filename. Default: "Q4_K_M".
+    #[serde(default)]
+    pub hf_quant: Option<String>,
+    /// Context window passed to llama-server via `--ctx-size`.
+    #[serde(default)]
+    pub ctx_size: Option<u32>,
+    /// GPU offload layers via `--n-gpu-layers`. 999 = all.
+    #[serde(default)]
+    pub n_gpu_layers: Option<u32>,
+    /// Extra raw args appended to the llama-server command line.
+    #[serde(default)]
+    pub extra_args: Vec<String>,
 }
 
 fn default_context_window() -> usize {
@@ -140,6 +171,7 @@ impl ModelRegistry {
                 ProviderType::Anthropic => "anthropic".into(),
                 ProviderType::OpenAi => "openai".into(),
                 ProviderType::XaiResponses => "xai-responses".into(),
+                ProviderType::LlamaCpp => "llama-cpp".into(),
             },
             base_url: config.base_url.clone(),
             reasoning: config.thinking,
@@ -200,7 +232,12 @@ impl ModelRegistry {
             }
         }
 
-        // 3. For localhost endpoints (Ollama, etc.), no auth needed
+        // 3. llama.cpp is always local — no auth needed.
+        if config.provider == ProviderType::LlamaCpp {
+            return Ok("local".into());
+        }
+
+        // 4. For localhost endpoints (Ollama, etc.), no auth needed
         if config.base_url.contains("localhost") || config.base_url.contains("127.0.0.1") {
             return Ok("local".into());
         }
@@ -250,6 +287,7 @@ fn load_zen_models(models: &mut Vec<ModelConfig>) {
             max_tokens: 16_384,
             thinking: model_id.contains("opus"),
             server_tools: None,
+            llama_cpp: None,
         });
     }
 }
@@ -267,6 +305,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 8_192,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "claude-opus".into(),
@@ -278,6 +317,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 8_192,
             thinking: true,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "claude-haiku".into(),
@@ -289,6 +329,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 8_192,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         // xAI (Grok) — OpenAI-compatible endpoint
         ModelConfig {
@@ -301,6 +342,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 16_384,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "grok-3-mini".into(),
@@ -312,6 +354,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 8_192,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "grok-2".into(),
@@ -323,6 +366,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 8_192,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         // xAI Grok 4.20 experimental beta
         ModelConfig {
@@ -335,6 +379,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 16_384,
             thinking: true,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "grok-4.20-non-reasoning".into(),
@@ -346,6 +391,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 16_384,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "grok-4.20-multi-agent".into(),
@@ -357,6 +403,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 16_384,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         // Additional xAI models
         ModelConfig {
@@ -369,6 +416,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 16_384,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "grok-4-1-reasoning".into(),
@@ -380,6 +428,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 16_384,
             thinking: true,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "grok-4.20-beta-0309-reasoning".into(),
@@ -391,6 +440,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 16_384,
             thinking: true,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "grok-4.20-multi-agent-beta-0309".into(),
@@ -402,6 +452,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 16_384,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         // OpenAI GPT models (latest as of 2026)
         ModelConfig {
@@ -414,6 +465,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 128_000,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "gpt-5.4-mini".into(),
@@ -425,6 +477,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 128_000,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
         ModelConfig {
             id: "gpt-5.4-nano".into(),
@@ -436,6 +489,7 @@ fn built_in_models() -> Vec<ModelConfig> {
             max_tokens: 128_000,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         },
 
     ]
@@ -470,6 +524,7 @@ impl LocalModelTemplate {
             max_tokens: self.max_tokens,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         }
     }
 }
@@ -689,6 +744,7 @@ mod tests {
             max_tokens: 16_384,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         };
         let model = ModelRegistry::to_model(&config);
         assert_eq!(model.id, "gpt-4o");
@@ -711,6 +767,7 @@ mod tests {
             max_tokens: 8_192,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         };
         std::env::set_var("__RHO_TEST_KEY__", "test-api-key-123");
         let key = ModelRegistry::resolve_api_key(&config).unwrap();
@@ -730,6 +787,7 @@ mod tests {
             max_tokens: 8_192,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         };
         let key = ModelRegistry::resolve_api_key(&config).unwrap();
         assert_eq!(key, "local");

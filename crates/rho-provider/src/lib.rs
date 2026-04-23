@@ -1,4 +1,6 @@
 pub mod error;
+pub mod hf_download;
+pub mod llama_cpp;
 pub mod openai;
 pub mod openai_request;
 pub mod openai_response;
@@ -126,7 +128,40 @@ pub fn stream_fn_for_model(config: &ModelConfig) -> StreamFn {
         ProviderType::XaiResponses => {
             xai_responses::xai_responses_stream_fn(config.server_tools.clone())
         }
+        ProviderType::LlamaCpp => {
+            // llama.cpp speaks OpenAI-compatible wire protocol. The `base_url`
+            // should be rewritten to the managed endpoint by `prepare_model_config`
+            // before `stream_fn_for_model` is called; server_tools is never
+            // meaningful for local models.
+            openai::openai_stream_fn(None)
+        }
     }
+}
+
+/// Resolve runtime lifecycle dependencies before streaming.
+///
+/// For `ProviderType::LlamaCpp`, this ensures a managed `llama-server` is
+/// running (spawning if needed, reusing otherwise) and returns the config with
+/// `base_url` rewritten to the server's `http://127.0.0.1:<port>/v1`.
+///
+/// For every other provider this is a no-op returning the config unchanged.
+///
+/// The returned `Endpoint` (when present) carries enough context for the UX
+/// layer to print an appropriate one-line status (`"✓ Using gemma-4-12b on
+/// :8431 (started 4m ago)"` vs `"✓ Started gemma-4-12b on :8431 (18.4s)"`).
+///
+/// Call sites should invoke this *after* `ModelRegistry::get` and *before*
+/// `ModelRegistry::to_model` / `stream_fn_for_model`.
+pub async fn prepare_model_config(
+    mut config: ModelConfig,
+) -> anyhow::Result<(ModelConfig, Option<llama_cpp::Endpoint>)> {
+    if config.provider != ProviderType::LlamaCpp {
+        return Ok((config, None));
+    }
+    let mgr = llama_cpp::LlamaCppManager::new();
+    let endpoint = mgr.ensure_running(&config).await?;
+    config.base_url = endpoint.base_url.clone();
+    Ok((config, Some(endpoint)))
 }
 
 #[cfg(test)]
@@ -145,6 +180,7 @@ mod tests {
             max_tokens: 8_192,
             thinking: false,
             server_tools: None,
+            llama_cpp: None,
         }
     }
 
@@ -159,6 +195,7 @@ mod tests {
             max_tokens: 16_384,
             thinking: false,
             server_tools: Some(vec!["web_search".into()]),
+            llama_cpp: None,
         }
     }
 
@@ -194,6 +231,7 @@ mod tests {
             max_tokens: 16_384,
             thinking: false,
             server_tools: Some(vec!["web_search".into()]),
+            llama_cpp: None,
         };
         let _f = stream_fn_for_model(&config);
     }

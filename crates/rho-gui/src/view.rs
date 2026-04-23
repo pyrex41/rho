@@ -410,6 +410,7 @@ fn model_group_label(m: &rho_core::models::ModelConfig) -> String {
             rho_core::models::ProviderType::Anthropic => "Anthropic".into(),
             rho_core::models::ProviderType::OpenAi => "OpenAI".into(),
             rho_core::models::ProviderType::XaiResponses => "xAI".into(),
+            rho_core::models::ProviderType::LlamaCpp => "llama.cpp".into(),
         };
     }
     // Group by domain from base_url
