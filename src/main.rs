@@ -36,12 +36,22 @@ impl OutputFormat {
 }
 
 #[derive(Parser)]
-#[command(name = "rho", about = "AI coding agent with file tools", args_conflicts_with_subcommands = true)]
+#[command(
+    name = "rho",
+    about = "AI coding agent with file tools",
+    version = env!("CARGO_PKG_VERSION"),
+    args_conflicts_with_subcommands = true,
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// The prompt to send to the agent
+    /// The prompt to send to the agent (positional)
+    #[arg(value_name = "PROMPT")]
+    prompt_arg: Option<String>,
+
+    /// The prompt to send to the agent (alternative to positional)
+    #[arg(short = 'p', long = "prompt", value_name = "PROMPT", conflicts_with = "prompt_arg")]
     prompt: Option<String>,
 
     /// Model ID to use (registry ID like "claude-sonnet", or raw model ID)
@@ -1265,8 +1275,8 @@ async fn main() -> Result<()> {
                 Some(std::fs::read_to_string(prompt_file).with_context(|| {
                     format!("Failed to read prompt file: {}", prompt_file.display())
                 })?)
-            } else if let Some(ref p) = cli.prompt {
-                Some(p.clone())
+            } else if let Some(p) = cli.prompt.as_deref().or(cli.prompt_arg.as_deref()) {
+                Some(p.to_string())
             } else {
                 None
             };
