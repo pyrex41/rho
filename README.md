@@ -181,7 +181,7 @@ rho-cli autoresearch \
 
 ### xAI Grok
 - `grok-3`, `grok-3-mini`, `grok-2`
-- `grok-4.20-reasoning`, `grok-4.20-non-reasoning` (experimental beta)
+- `grok-4.20-reasoning`, `grok-4.20-non-reasoning` (experimental)
 - `grok-4.20-multi-agent` (multi-agent responses endpoint)
 - Additional experimental: `grok-code-fast-1`, `grok-4-1-reasoning`, etc.
 

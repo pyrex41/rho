@@ -374,11 +374,11 @@ fn built_in_models() -> Vec<ModelConfig> {
             server_tools: None,
             llama_cpp: None,
         },
-        // xAI Grok 4.20 experimental beta
+        // xAI Grok 4.20 experimental
         ModelConfig {
             id: "grok-4.20-reasoning".into(),
             provider: ProviderType::OpenAi,
-            model_id: "grok-4.20-experimental-beta-0304-reasoning".into(),
+            model_id: "grok-4.20-experimental-0304-reasoning".into(),
             base_url: "https://api.x.ai/v1".into(),
             api_key_env: Some("XAI_API_KEY".into()),
             context_window: 131_072,
@@ -390,7 +390,7 @@ fn built_in_models() -> Vec<ModelConfig> {
         ModelConfig {
             id: "grok-4.20-non-reasoning".into(),
             provider: ProviderType::OpenAi,
-            model_id: "grok-4.20-experimental-beta-0304-non-reasoning".into(),
+            model_id: "grok-4.20-experimental-0304-non-reasoning".into(),
             base_url: "https://api.x.ai/v1".into(),
             api_key_env: Some("XAI_API_KEY".into()),
             context_window: 131_072,
@@ -402,7 +402,7 @@ fn built_in_models() -> Vec<ModelConfig> {
         ModelConfig {
             id: "grok-4.20-multi-agent".into(),
             provider: ProviderType::XaiResponses,
-            model_id: "grok-4.20-multi-agent-experimental-beta-0304".into(),
+            model_id: "grok-4.20-multi-agent-experimental-0304".into(),
             base_url: "https://api.x.ai/v1".into(),
             api_key_env: Some("XAI_API_KEY".into()),
             context_window: 131_072,
@@ -437,9 +437,9 @@ fn built_in_models() -> Vec<ModelConfig> {
             llama_cpp: None,
         },
         ModelConfig {
-            id: "grok-4.20-beta-0309-reasoning".into(),
+            id: "grok-4.20-0309-reasoning".into(),
             provider: ProviderType::OpenAi,
-            model_id: "grok-4.20-beta-0309-reasoning".into(),
+            model_id: "grok-4.20-0309-reasoning".into(),
             base_url: "https://api.x.ai/v1".into(),
             api_key_env: Some("XAI_API_KEY".into()),
             context_window: 131_072,
@@ -449,9 +449,9 @@ fn built_in_models() -> Vec<ModelConfig> {
             llama_cpp: None,
         },
         ModelConfig {
-            id: "grok-4.20-multi-agent-beta-0309".into(),
+            id: "grok-4.20-multi-agent-0309".into(),
             provider: ProviderType::XaiResponses,
-            model_id: "grok-4.20-multi-agent-beta-0309".into(),
+            model_id: "grok-4.20-multi-agent-0309".into(),
             base_url: "https://api.x.ai/v1".into(),
             api_key_env: Some("XAI_API_KEY".into()),
             context_window: 131_072,

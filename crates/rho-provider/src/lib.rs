@@ -224,7 +224,7 @@ mod tests {
         let config = ModelConfig {
             id: "grok-4.20-multi-agent".into(),
             provider: ProviderType::XaiResponses,
-            model_id: "grok-4.20-multi-agent-experimental-beta-0304".into(),
+            model_id: "grok-4.20-multi-agent-experimental-0304".into(),
             base_url: "https://api.x.ai/v1".into(),
             api_key_env: Some("XAI_API_KEY".into()),
             context_window: 131_072,

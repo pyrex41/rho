@@ -1,6 +1,6 @@
 [package]
 name = "rho-server"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 description = "HTTP server mode for the rho AI coding agent"
 license = "MIT"
