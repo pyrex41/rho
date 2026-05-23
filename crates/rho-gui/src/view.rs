@@ -587,6 +587,8 @@ fn render_chat<'a>(app: &'a RhoApp) -> Element<'a, Message> {
 // --- Setup guide (first-run) ---
 
 fn render_setup_guide<'a>() -> Element<'a, Message> {
+    use crate::app::AuthProvider;
+
     let heading = text("Welcome to Rho")
         .size(22)
         .font(FONT_INTER)
@@ -602,6 +604,50 @@ fn render_setup_guide<'a>() -> Element<'a, Message> {
         .font(FONT_INTER)
         .color(color!(0x565f89));
 
+    let xai_connect_btn = button(text("Connect Grok subscription").size(13).color(color!(0x9ece6a)))
+        .on_press(Message::ConnectProvider(AuthProvider::Xai))
+        .padding([6, 14])
+        .style(|_theme: &Theme, status| button::Style {
+            background: Some(match status {
+                button::Status::Hovered => color!(0x1a2e1a).into(),
+                _ => color!(0x0d1a0d).into(),
+            }),
+            border: iced::Border {
+                color: color!(0x9ece6a),
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..button::Style::default()
+        });
+
+    let xai_section = container(
+        column![
+            text("xAI (Grok)")
+                .size(14)
+                .font(FONT_MONO_BOLD)
+                .color(color!(0x9ece6a)),
+            text("Sign in with your SuperGrok or X Premium account — no API key required.\nOr: export XAI_API_KEY=xai-...")
+                .size(13)
+                .font(FONT_MONO)
+                .color(color!(0xa9b1d6)),
+            xai_connect_btn,
+        ]
+        .spacing(6),
+    )
+    .padding(12)
+    .width(Length::Fill)
+    .style(|theme: &Theme| {
+        let palette = theme.extended_palette();
+        container::Style {
+            background: Some(palette.background.strong.color.into()),
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    });
+
     container(
         column![
             heading,
@@ -614,10 +660,7 @@ fn render_setup_guide<'a>() -> Element<'a, Message> {
                 "OpenAI (GPT)",
                 "export OPENAI_API_KEY=sk-...",
             ),
-            setup_section(
-                "xAI (Grok)",
-                "export XAI_API_KEY=xai-...",
-            ),
+            xai_section,
             setup_section(
                 "Ollama (local, no key needed)",
                 "1. Install Ollama and pull a model:  ollama pull gemma2:9b\n2. Click Config in the sidebar, go to Models tab, and add:\n\n[[model]]\nid = \"ollama-gemma\"\nprovider = \"openai\"\nmodel_id = \"gemma2:9b\"\nbase_url = \"http://localhost:11434/v1\"\ncontext_window = 8192\nmax_tokens = 4096",
@@ -925,8 +968,17 @@ fn render_settings(app: &RhoApp) -> Element<'_, Message> {
             SettingsTab::Models,
             app.settings_tab == SettingsTab::Models
         ),
+        tab_btn(
+            "Providers".into(),
+            SettingsTab::Providers,
+            app.settings_tab == SettingsTab::Providers
+        ),
     ]
     .spacing(8);
+
+    if app.settings_tab == SettingsTab::Providers {
+        return render_providers_tab(app, tabs);
+    }
 
     let (editor_elem, file_label, save_msg): (Element<'_, Message>, String, Message) = match app.settings_tab {
         SettingsTab::Project => {
@@ -974,6 +1026,7 @@ fn render_settings(app: &RhoApp) -> Element<'_, Message> {
                 });
             (ed.into(), path_label, Message::SaveModelsConfig)
         }
+        SettingsTab::Providers => unreachable!("handled above"),
     };
 
     let save_btn = button(text("Save").size(13).color(color!(0x9ece6a)))
@@ -1008,5 +1061,154 @@ fn render_settings(app: &RhoApp) -> Element<'_, Message> {
     )
     .width(Length::Fill)
     .height(Length::Fill)
+    .into()
+}
+
+fn render_providers_tab<'a>(
+    app: &'a RhoApp,
+    tabs: iced::widget::Row<'a, Message>,
+) -> Element<'a, Message> {
+    use crate::app::AuthProvider;
+    use rho_core::auth::{connection_status, Provider};
+
+    let mut rows = Column::new().spacing(12);
+
+    let providers = [
+        ("Anthropic (Claude)", AuthProvider::Anthropic, Provider::Anthropic),
+        ("xAI (Grok subscription)", AuthProvider::Xai, Provider::Xai),
+    ];
+
+    for (display_name, gui_provider, core_provider) in providers {
+        let status = connection_status(core_provider);
+        rows = rows.push(provider_row(app, display_name, gui_provider, status));
+    }
+
+    let header = column![
+        text("Providers").size(18).font(FONT_INTER).color(color!(0x7aa2f7)),
+        text("Connect a paid subscription or use an API key for each provider.")
+            .size(12)
+            .font(FONT_INTER)
+            .color(color!(0xa9b1d6)),
+    ]
+    .spacing(4);
+
+    let body = column![tabs, header, rows]
+        .spacing(16)
+        .padding(20)
+        .width(Length::Fill);
+
+    container(body).width(Length::Fill).height(Length::Fill).into()
+}
+
+fn provider_row<'a>(
+    app: &'a RhoApp,
+    display_name: &'a str,
+    gui_provider: crate::app::AuthProvider,
+    status: rho_core::auth::ConnectionStatus,
+) -> Element<'a, Message> {
+    use crate::app::AuthProvider;
+    use rho_core::auth::ConnectionStatus;
+
+    let (status_text, status_color, connected) = match &status {
+        ConnectionStatus::Disconnected => (
+            "Not connected".to_string(),
+            color!(0x565f89),
+            false,
+        ),
+        ConnectionStatus::Connected { source, label } => {
+            let label_part = label
+                .as_deref()
+                .map(|l| format!(" — {l}"))
+                .unwrap_or_default();
+            (
+                format!("Connected via {source}{label_part}"),
+                color!(0x9ece6a),
+                true,
+            )
+        }
+    };
+
+    let busy = app.provider_oauth_in_progress == Some(gui_provider);
+
+    let action_btn: Element<'a, Message> = if connected {
+        button(text("Disconnect").size(13).color(color!(0xf7768e)))
+            .on_press(Message::DisconnectProvider(gui_provider))
+            .padding([6, 14])
+            .style(|_theme: &Theme, status| button::Style {
+                background: Some(match status {
+                    button::Status::Hovered => color!(0x2a1419).into(),
+                    _ => color!(0x1a0d10).into(),
+                }),
+                border: iced::Border {
+                    color: color!(0xf7768e),
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..button::Style::default()
+            })
+            .into()
+    } else if matches!(gui_provider, AuthProvider::Anthropic) {
+        // Anthropic still uses the CLI flow; surface it instead of a clickable button.
+        text("Use `rho auth login` (CLI)")
+            .size(12)
+            .color(color!(0x565f89))
+            .into()
+    } else {
+        let label = if busy { "Connecting…" } else { "Connect" };
+        let mut btn = button(text(label).size(13).color(color!(0x9ece6a)))
+            .padding([6, 14])
+            .style(|_theme: &Theme, status| button::Style {
+                background: Some(match status {
+                    button::Status::Hovered => color!(0x1a2e1a).into(),
+                    _ => color!(0x0d1a0d).into(),
+                }),
+                border: iced::Border {
+                    color: color!(0x9ece6a),
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..button::Style::default()
+            });
+        if !busy {
+            btn = btn.on_press(Message::ConnectProvider(gui_provider));
+        }
+        btn.into()
+    };
+
+    let mut info_col = Column::new().spacing(4);
+    info_col = info_col.push(
+        text(display_name)
+            .size(14)
+            .font(FONT_MONO_BOLD)
+            .color(color!(0xa9b1d6)),
+    );
+    info_col = info_col.push(text(status_text).size(12).color(status_color));
+    if busy {
+        if let Some(ref msg) = app.provider_oauth_status {
+            info_col = info_col.push(text(msg.clone()).size(11).color(color!(0x7aa2f7)));
+        }
+    }
+
+    container(
+        row![
+            info_col,
+            iced::widget::Space::new().width(Length::Fill),
+            action_btn,
+        ]
+        .align_y(iced::Alignment::Center),
+    )
+    .padding(12)
+    .width(Length::Fill)
+    .style(|theme: &Theme| {
+        let palette = theme.extended_palette();
+        container::Style {
+            background: Some(palette.background.strong.color.into()),
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    })
     .into()
 }

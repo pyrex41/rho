@@ -218,9 +218,11 @@ impl ModelRegistry {
     ///
     /// Resolution order:
     /// 1. `api_key_env` env var (if set and non-empty)
-    /// 2. `anthropic-auth` keychain / OAuth (for Anthropic provider only)
-    /// 3. `"local"` (for localhost/127.0.0.1 base URLs — e.g. Ollama)
-    /// 4. Error
+    /// 2. Anthropic: keychain / OAuth credentials
+    /// 3. llama.cpp provider: always local (no auth)
+    /// 4. xAI (base_url contains api.x.ai): grok-CLI tokens / rho's own OAuth credentials
+    /// 5. `"local"` (for localhost/127.0.0.1 base URLs — e.g. Ollama)
+    /// 6. Error
     pub fn resolve_api_key(config: &ModelConfig) -> Result<String, String> {
         // 1. Try designated env var
         if let Some(ref env_var) = config.api_key_env {
@@ -243,7 +245,17 @@ impl ModelRegistry {
             return Ok("local".into());
         }
 
-        // 4. For localhost endpoints (Ollama, etc.), no auth needed
+        // 4. For xAI (api.x.ai), try grok-CLI tokens then rho's OAuth credentials.
+        //    This catches both OpenAi-shaped grok models and the XaiResponses variants.
+        if config.base_url.contains("api.x.ai") {
+            if let Ok(token) =
+                crate::auth::get_token_for(crate::auth::Provider::Xai)
+            {
+                return Ok(token);
+            }
+        }
+
+        // 5. For localhost endpoints (Ollama, etc.), no auth needed
         if config.base_url.contains("localhost") || config.base_url.contains("127.0.0.1") {
             return Ok("local".into());
         }

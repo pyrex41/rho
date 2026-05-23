@@ -1,17 +1,11 @@
+use super::credentials::{self, Provider};
 use super::AuthError;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
 
-/// OAuth credentials saved to disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OAuthCredentials {
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub expires_at: Option<u64>,
-}
+pub use super::credentials::OAuthCredentials;
 
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
@@ -99,38 +93,19 @@ pub async fn exchange_code(
         access_token: data.access_token,
         refresh_token: data.refresh_token,
         expires_at,
+        account_label: None,
     })
 }
 
-/// Save credentials to the auth file (~/.config/anthropic-auth/auth.json).
+/// Save Anthropic credentials to the unified store (~/.config/rho/credentials.json).
 pub fn save_credentials(creds: &OAuthCredentials) -> Result<(), AuthError> {
-    let path = credentials_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| AuthError::OAuthError(format!("failed to create config dir: {e}")))?;
-    }
-    let json = serde_json::to_string_pretty(creds)
-        .map_err(|e| AuthError::OAuthError(format!("failed to serialize credentials: {e}")))?;
-    std::fs::write(&path, json.as_bytes())
-        .map_err(|e| AuthError::OAuthError(format!("failed to write credentials: {e}")))?;
-    // Set file permissions to 600 (owner read/write only)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(&path, perms)
-            .map_err(|e| AuthError::OAuthError(format!("failed to set permissions: {e}")))?;
-    }
-    Ok(())
+    credentials::save(Provider::Anthropic, creds)
 }
 
-/// Load credentials from the auth file (~/.config/anthropic-auth/auth.json).
+/// Load Anthropic credentials from the unified store (with legacy-path migration on first read).
 pub fn load_credentials() -> Result<OAuthCredentials, AuthError> {
-    let path = credentials_path();
-    let data = std::fs::read_to_string(&path)
-        .map_err(|e| AuthError::OAuthError(format!("failed to read credentials: {e}")))?;
-    serde_json::from_str(&data)
-        .map_err(|e| AuthError::OAuthError(format!("failed to parse credentials: {e}")))
+    credentials::load(Provider::Anthropic)?
+        .ok_or_else(|| AuthError::OAuthError("no Anthropic credentials saved".into()))
 }
 
 /// Run the full interactive OAuth login flow.
@@ -169,11 +144,6 @@ pub async fn login() -> Result<OAuthCredentials, AuthError> {
 }
 
 // -- Internal helpers --
-
-fn credentials_path() -> PathBuf {
-    let config = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    config.join("anthropic-auth").join("auth.json")
-}
 
 fn read_random(buf: &mut [u8]) {
     use std::fs::File;
@@ -263,6 +233,7 @@ mod tests {
             access_token: "sk-ant-oat-test-token".into(),
             refresh_token: Some("rt-test-refresh".into()),
             expires_at: Some(1700000000),
+            account_label: None,
         };
 
         // Write

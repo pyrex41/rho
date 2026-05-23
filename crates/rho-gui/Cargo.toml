@@ -19,6 +19,7 @@ serde_json = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
 dirs = "5"
+open = "5"
 
 [package.metadata.bundle]
 name = "Rho"

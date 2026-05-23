@@ -107,6 +107,16 @@ enum AuthCommands {
     Token,
     /// Show authentication status
     Status,
+    /// Connect an xAI / Grok subscription via OAuth.
+    ///
+    /// By default opens a browser and listens on 127.0.0.1:56121 for the callback.
+    /// Use --headless on machines without a browser or where loopback is unreachable
+    /// (SSH/Docker/VPS) — that path prints a URL + code to enter on any other device.
+    Xai {
+        /// Use RFC 8628 device-code flow (browserless / SSH / VPS).
+        #[arg(long)]
+        headless: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -274,6 +284,40 @@ enum ModelsCommands {
         /// Model id to warm up
         id: String,
     },
+}
+
+async fn run_xai_browser_flow() -> Result<Option<String>> {
+    let handle = rho_core::auth::xai_oauth::start_loopback_authorize()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start OAuth listener: {e}"))?;
+    eprintln!("Opening browser for xAI authorization...");
+    if open::that(&handle.url).is_err() {
+        eprintln!("Could not open browser automatically.");
+    }
+    eprintln!("If the browser didn't open, visit this URL on this machine:\n{}\n", handle.url);
+    let creds = handle
+        .complete()
+        .await
+        .map_err(|e| anyhow::anyhow!("xAI OAuth flow failed: {e}"))?;
+    Ok(creds.account_label)
+}
+
+async fn run_xai_device_flow() -> Result<Option<String>> {
+    let start = rho_core::auth::xai_oauth::request_device_code()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to request device code: {e}"))?;
+    let display_url = start
+        .verification_uri_complete
+        .clone()
+        .unwrap_or_else(|| start.verification_uri.clone());
+    eprintln!(
+        "\nOn any device with a browser:\n  1. Visit: {}\n  2. Enter code: {}\n\nWaiting for approval (polling every {}s, expires in {}s)...",
+        display_url, start.user_code, start.interval_secs, start.expires_in_secs,
+    );
+    let creds = rho_core::auth::xai_oauth::run_device_flow(start)
+        .await
+        .map_err(|e| anyhow::anyhow!("device-code flow failed: {e}"))?;
+    Ok(creds.account_label)
 }
 
 fn now_ms() -> u64 {
@@ -761,6 +805,24 @@ async fn main() -> Result<()> {
                         Ok(token) => print!("{token}"),
                         Err(e) => {
                             eprintln!("Error: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                AuthCommands::Xai { headless } => {
+                    let result = if headless {
+                        run_xai_device_flow().await
+                    } else {
+                        run_xai_browser_flow().await
+                    };
+                    match result {
+                        Ok(label) => {
+                            eprintln!("xAI authentication successful{}.", label
+                                .map(|l| format!(" ({})", l))
+                                .unwrap_or_default());
+                        }
+                        Err(e) => {
+                            eprintln!("xAI authentication failed: {e}");
                             std::process::exit(1);
                         }
                     }

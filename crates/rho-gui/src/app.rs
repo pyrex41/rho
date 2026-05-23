@@ -185,12 +185,33 @@ pub struct RhoApp {
     pub sidebar_width: f32,
     pub sidebar_dragging: bool,
     pub collapsed_providers: HashSet<String>,
+    // Provider OAuth state
+    pub provider_oauth_in_progress: Option<AuthProvider>,
+    pub provider_oauth_status: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SettingsTab {
     Project,
     Models,
+    Providers,
+}
+
+/// GUI-side mirror of `rho_core::auth::Provider`. Kept local so Messages stay Clone+Debug
+/// without leaking a trait bound onto the core crate's enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthProvider {
+    Anthropic,
+    Xai,
+}
+
+impl AuthProvider {
+    pub fn to_core(self) -> rho_core::auth::Provider {
+        match self {
+            AuthProvider::Anthropic => rho_core::auth::Provider::Anthropic,
+            AuthProvider::Xai => rho_core::auth::Provider::Xai,
+        }
+    }
 }
 
 /// Iced messages.
@@ -224,6 +245,13 @@ pub enum Message {
     ModelsConfigAction(iced::widget::text_editor::Action),
     SaveProjectConfig,
     SaveModelsConfig,
+    // Provider OAuth
+    ConnectProvider(AuthProvider),
+    ProviderOAuthComplete {
+        provider: AuthProvider,
+        result: Result<Option<String>, String>,
+    },
+    DisconnectProvider(AuthProvider),
     Noop,
 }
 
@@ -371,6 +399,8 @@ impl RhoApp {
             sidebar_width: 220.0,
             sidebar_dragging: false,
             collapsed_providers: HashSet::new(),
+            provider_oauth_in_progress: None,
+            provider_oauth_status: None,
         };
 
         (app, IcedTask::none())
@@ -732,6 +762,99 @@ impl RhoApp {
                         Err(e) => {
                             self.error = Some(format!("Failed to save models.toml: {}", e));
                         }
+                    }
+                }
+                IcedTask::none()
+            }
+            Message::ConnectProvider(provider) => {
+                if self.provider_oauth_in_progress.is_some() {
+                    return IcedTask::none();
+                }
+                match provider {
+                    AuthProvider::Xai => {
+                        self.provider_oauth_in_progress = Some(provider);
+                        self.provider_oauth_status =
+                            Some("Opening browser for xAI authorization…".into());
+                        IcedTask::perform(
+                            async move {
+                                let handle =
+                                    match rho_core::auth::xai_oauth::start_loopback_authorize()
+                                        .await
+                                    {
+                                        Ok(h) => h,
+                                        Err(e) => {
+                                            return Message::ProviderOAuthComplete {
+                                                provider: AuthProvider::Xai,
+                                                result: Err(e.to_string()),
+                                            };
+                                        }
+                                    };
+                                let _ = open::that(&handle.url);
+                                let result = handle
+                                    .complete()
+                                    .await
+                                    .map(|creds| creds.account_label)
+                                    .map_err(|e| e.to_string());
+                                Message::ProviderOAuthComplete {
+                                    provider: AuthProvider::Xai,
+                                    result,
+                                }
+                            },
+                            std::convert::identity,
+                        )
+                    }
+                    AuthProvider::Anthropic => {
+                        // Anthropic uses a paste-based PKCE flow; route users to the CLI for now
+                        // rather than building a second interactive surface inside the GUI.
+                        self.error = Some(
+                            "Anthropic OAuth still uses the CLI flow: run `rho auth login`."
+                                .into(),
+                        );
+                        IcedTask::none()
+                    }
+                }
+            }
+            Message::ProviderOAuthComplete { provider, result } => {
+                self.provider_oauth_in_progress = None;
+                match result {
+                    Ok(label) => {
+                        self.provider_oauth_status = Some(match label {
+                            Some(l) => format!("Connected as {l}"),
+                            None => "Connected".into(),
+                        });
+                        // Refresh model availability so the sidebar reflects the new auth state.
+                        self.model_registry = ModelRegistry::load();
+                        let (available_ids, _) = self.model_registry.check_availability();
+                        self.available_model_ids = available_ids.into_iter().collect();
+                        self.error = None;
+                        // Suppress unused warning if provider is later extended.
+                        let _ = provider;
+                    }
+                    Err(e) => {
+                        self.provider_oauth_status = None;
+                        self.error = Some(format!(
+                            "{} authentication failed: {e}",
+                            match provider {
+                                AuthProvider::Anthropic => "Anthropic",
+                                AuthProvider::Xai => "xAI",
+                            }
+                        ));
+                    }
+                }
+                IcedTask::none()
+            }
+            Message::DisconnectProvider(provider) => {
+                let core = provider.to_core();
+                match rho_core::auth::credentials::delete(core) {
+                    Ok(()) => {
+                        self.provider_oauth_status = None;
+                        self.model_registry = ModelRegistry::load();
+                        let (available_ids, _) = self.model_registry.check_availability();
+                        self.available_model_ids = available_ids.into_iter().collect();
+                        self.error = None;
+                    }
+                    Err(e) => {
+                        self.error = Some(format!("Failed to disconnect: {e}"));
                     }
                 }
                 IcedTask::none()
