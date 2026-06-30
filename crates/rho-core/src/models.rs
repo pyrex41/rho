@@ -472,6 +472,31 @@ fn built_in_models() -> Vec<ModelConfig> {
             server_tools: None,
             llama_cpp: None,
         },
+        // xAI Grok 4.3 — smart default, and Grok Build 0.1 — fast default
+        ModelConfig {
+            id: "grok-4.3".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-4.3".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: true,
+            server_tools: None,
+            llama_cpp: None,
+        },
+        ModelConfig {
+            id: "grok-build-0.1".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-build-0.1".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: false,
+            server_tools: None,
+            llama_cpp: None,
+        },
         // OpenAI GPT models (latest as of 2026)
         ModelConfig {
             id: "gpt-5.4".into(),
