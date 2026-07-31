@@ -134,8 +134,8 @@ mod tests {
     #[test]
     fn test_mismatch_error_multiple_lines() {
         let lines = vec![
-            "line 1", "line 2", "line 3", "line 4", "line 5", "line 6",
-            "line 7", "line 8", "line 9", "line 10",
+            "line 1", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7", "line 8",
+            "line 9", "line 10",
         ];
         let mismatches = vec![
             MismatchedLine {

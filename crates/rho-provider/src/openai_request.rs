@@ -129,7 +129,11 @@ fn convert_assistant_message(content: &[Content]) -> Value {
             Content::Text { text } => {
                 text_parts.push(text.as_str());
             }
-            Content::ToolCall { id, name, arguments } => {
+            Content::ToolCall {
+                id,
+                name,
+                arguments,
+            } => {
                 let args_str = serde_json::to_string(arguments).unwrap_or_else(|_| "{}".into());
                 tool_calls.push(json!({
                     "id": id,

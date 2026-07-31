@@ -65,9 +65,42 @@ The GUI provides an interactive chat with model selection, history, and visual t
 
 ```
 rho-cli [OPTIONS] [PROMPT]
+rho-cli run --request-file <PATH|-> --events jsonl
 rho-cli loop [OPTIONS]
 rho-cli autoresearch --benchmark <CMD> --metric <NAME> [OPTIONS]
 ```
+
+### Embedded execution protocol
+
+Hosts such as task schedulers and durable orchestrators can submit one bounded
+[`rho.run/v1`](crates/rho-protocol/README.md) request and consume flushed JSONL
+events without scraping the human CLI:
+
+```bash
+rho-cli run --request-file request.json --events jsonl
+cat request.json | rho-cli run --request-file - --events jsonl
+```
+
+Protocol stdout contains events only; diagnostics are written to stderr. The
+execution grant is deny-by-default. File tools enforce canonical read/write
+roots, while Bash, web, and child-agent grants currently fail closed until
+their granular policies are implemented.
+
+`model.provider` uses the stable names `anthropic`, `openai`, or `xai`.
+`model.id` may be either a documented Rho alias (for example
+`claude-sonnet`, `gpt-5.4`, or `grok-2`) or a raw provider model ID. Aliases
+resolve to their provider wire IDs and configured endpoint; raw IDs use that
+provider's default endpoint. Credentials are resolved without entering the
+event stream:
+
+| Provider | Credential reference | Other supported auth |
+| --- | --- | --- |
+| Claude / Anthropic | `env:ANTHROPIC_API_KEY` | Claude OAuth/keychain |
+| OpenAI | `env:OPENAI_API_KEY` | — |
+| Grok / xAI | `env:XAI_API_KEY` | Grok CLI or Rho xAI OAuth |
+
+An explicit `credential_ref` must match the selected provider. Rho never
+falls back from one provider's credential to another provider.
 
 ### Options
 

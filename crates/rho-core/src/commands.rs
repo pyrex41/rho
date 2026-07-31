@@ -95,8 +95,7 @@ fn parse_command_file(name: &str, content: &str) -> Option<Command> {
     let trimmed = content.trim_start();
 
     // Try to parse frontmatter for description
-    if trimmed.starts_with("---") {
-        let after_first = &trimmed[3..];
+    if let Some(after_first) = trimmed.strip_prefix("---") {
         if let Some(end) = after_first.find("\n---") {
             let frontmatter = &after_first[..end];
             let body_start = 3 + end + 4;

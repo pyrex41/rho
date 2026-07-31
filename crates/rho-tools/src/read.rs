@@ -89,12 +89,9 @@ impl AgentTool for ReadTool {
         params: Value,
         _cancel: CancellationToken,
     ) -> Result<ToolResult, ToolError> {
-        let path_str = params
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidParameters("missing or invalid 'path' parameter".into())
-            })?;
+        let path_str = params.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            ToolError::InvalidParameters("missing or invalid 'path' parameter".into())
+        })?;
 
         let offset = params
             .get("offset")
@@ -176,7 +173,13 @@ impl AgentTool for ReadTool {
                 output.push('\n');
             }
             let hash = rho_hashline::compute_line_hash(line);
-            output.push_str(&format!("{:>width$}:{}|{}", line_num, hash, line, width = pad_width));
+            output.push_str(&format!(
+                "{:>width$}:{}|{}",
+                line_num,
+                hash,
+                line,
+                width = pad_width
+            ));
         }
 
         // If we truncated due to default limit (no explicit limit), note remaining lines
@@ -222,7 +225,7 @@ async fn read_directory(path_str: &str) -> Result<ToolResult, ToolError> {
     }
 
     // Sort by modification time, most recent first
-    entries.sort_by(|a, b| b.2.cmp(&a.2));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.2));
 
     let mut output = format!("Contents of {}:\n", path_str);
     for (name, is_dir, _) in &entries {
@@ -337,9 +340,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
         curr[0] = i + 1;
         for (j, b_byte) in b.bytes().enumerate() {
             let cost = if a_byte == b_byte { 0 } else { 1 };
-            curr[j + 1] = (prev[j + 1] + 1)
-                .min(curr[j] + 1)
-                .min(prev[j] + cost);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -380,7 +381,10 @@ mod tests {
         assert!(text.contains("|beta"), "should contain beta: {text}");
         assert!(text.contains("|gamma"), "should contain gamma: {text}");
         // Verify hashline prefix format
-        assert!(text.lines().next().unwrap().contains(":"), "should have LINE:HASH format");
+        assert!(
+            text.lines().next().unwrap().contains(":"),
+            "should have LINE:HASH format"
+        );
     }
 
     #[tokio::test]
@@ -403,8 +407,14 @@ mod tests {
         assert!(text.contains("|line 6"), "should contain line 6: {text}");
         assert!(text.contains("|line 7"), "should contain line 7: {text}");
         // Lines 4 and 8 should not appear
-        assert!(!text.contains("|line 4"), "should not contain line 4: {text}");
-        assert!(!text.contains("|line 8"), "should not contain line 8: {text}");
+        assert!(
+            !text.contains("|line 4"),
+            "should not contain line 4: {text}"
+        );
+        assert!(
+            !text.contains("|line 8"),
+            "should not contain line 8: {text}"
+        );
     }
 
     #[tokio::test]
@@ -496,7 +506,11 @@ mod tests {
         let text = extract_text(&result);
 
         // Should show first 2000 lines and a message about remaining
-        assert!(text.contains("|line 1"), "should contain line 1: first 20 chars: {}", &text[..80]);
+        assert!(
+            text.contains("|line 1"),
+            "should contain line 1: first 20 chars: {}",
+            &text[..80]
+        );
         assert!(text.contains("|line 2000"), "should contain line 2000");
         assert!(text.contains("more lines in file"));
         assert!(text.contains("offset=2001"));

@@ -1,27 +1,22 @@
-use std::time::Duration;
 use async_trait::async_trait;
 use serde::Deserialize;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 // === Hook Events ===
 
 /// All lifecycle events that hooks can respond to.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum HookEvent {
     /// Before a tool executes. Can veto or modify input.
     PreToolUse,
     /// After all tools in a batch complete (existing behavior).
+    #[default]
     PostToolUse,
     /// When the agent loop starts.
     SessionStart,
     /// At the end of each LLM turn (after post-tools hooks).
     TurnEnd,
-}
-
-impl Default for HookEvent {
-    fn default() -> Self {
-        Self::PostToolUse
-    }
 }
 
 // === Structured Hook Output ===

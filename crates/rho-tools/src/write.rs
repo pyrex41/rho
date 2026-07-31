@@ -74,10 +74,9 @@ impl AgentTool for WriteTool {
         params: Value,
         _cancel: CancellationToken,
     ) -> Result<ToolResult, ToolError> {
-        let path = params
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParameters("missing or invalid 'path' parameter".into()))?;
+        let path = params.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+            ToolError::InvalidParameters("missing or invalid 'path' parameter".into())
+        })?;
 
         let content = params
             .get("content")

@@ -64,10 +64,7 @@ pub async fn resolve_or_download(repo: &str, quant_hint: Option<&str>) -> Result
     }
 
     let local_path = cache_dir.join(&filename);
-    let download_url = format!(
-        "https://huggingface.co/{}/resolve/main/{}",
-        repo, filename
-    );
+    let download_url = format!("https://huggingface.co/{}/resolve/main/{}", repo, filename);
 
     download_with_resume(&client, &download_url, &local_path, repo, &filename).await?;
     Ok(local_path)
@@ -204,10 +201,7 @@ async fn download_with_resume(
         req = req.header(reqwest::header::RANGE, format!("bytes={}-", already));
     }
     let req = apply_auth(req);
-    let resp = req
-        .send()
-        .await
-        .with_context(|| format!("GET {}", url))?;
+    let resp = req.send().await.with_context(|| format!("GET {}", url))?;
     let status = resp.status();
     if !(status.is_success() || status.as_u16() == 206) {
         bail!("GET {} returned {}", url, status);

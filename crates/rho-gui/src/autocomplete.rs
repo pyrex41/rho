@@ -3,7 +3,7 @@ use std::path::Path;
 use rho_core::memories::MemoryMetadata;
 use rho_core::skills::SkillMetadata;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AutocompleteState {
     pub active: bool,
     pub trigger: Option<AutocompleteTrigger>,
@@ -22,17 +22,6 @@ pub struct Suggestion {
     pub display: String,
     pub completion: String,
     pub is_directory: bool,
-}
-
-impl Default for AutocompleteState {
-    fn default() -> Self {
-        Self {
-            active: false,
-            trigger: None,
-            suggestions: Vec::new(),
-            selected: 0,
-        }
-    }
 }
 
 impl AutocompleteState {
@@ -240,8 +229,8 @@ pub fn resolve_references(
             };
             // Check following char is EOL or whitespace
             let end = pos + token.len();
-            let valid_end = end >= remaining.len()
-                || remaining[end..].starts_with(char::is_whitespace);
+            let valid_end =
+                end >= remaining.len() || remaining[end..].starts_with(char::is_whitespace);
 
             if valid_start && valid_end {
                 result.push_str(&remaining[..pos]);
@@ -273,8 +262,8 @@ pub fn resolve_references(
                 remaining[..pos].ends_with(char::is_whitespace)
             };
             let end = pos + token.len();
-            let valid_end = end >= remaining.len()
-                || remaining[end..].starts_with(char::is_whitespace);
+            let valid_end =
+                end >= remaining.len() || remaining[end..].starts_with(char::is_whitespace);
 
             if valid_start && valid_end {
                 result.push_str(&remaining[..pos]);
@@ -312,9 +301,7 @@ pub fn resolve_references(
 
         // Extract the file path (until whitespace or EOL)
         let after_at = &remaining[pos + 1..];
-        let path_end = after_at
-            .find(char::is_whitespace)
-            .unwrap_or(after_at.len());
+        let path_end = after_at.find(char::is_whitespace).unwrap_or(after_at.len());
         let file_path = &after_at[..path_end];
 
         if file_path.is_empty() {
@@ -498,7 +485,11 @@ mod tests {
     fn resolve_references_skill() {
         let tmp = tempfile::tempdir().unwrap();
         let skill_file = tmp.path().join("SKILL.md");
-        fs::write(&skill_file, "---\nname: calc\ndescription: Math\n---\nDo math.").unwrap();
+        fs::write(
+            &skill_file,
+            "---\nname: calc\ndescription: Math\n---\nDo math.",
+        )
+        .unwrap();
 
         let skills = vec![SkillMetadata {
             name: "calc".into(),

@@ -1,0 +1,16 @@
+{
+  "protocol": "rho.run/v2",
+  "run_id": "fixture-run-1",
+  "model": { "provider": "anthropic", "id": "claude-sonnet-4-5" },
+  "input": [],
+  "grant": {
+    "grant_id": "fixture-grant-1",
+    "expires_at": "2030-01-01T00:00:00Z",
+    "providers": ["anthropic"],
+    "models": ["claude-*"],
+    "tools": [],
+    "read_roots": [],
+    "write_roots": [],
+    "network": { "mode": "none" }
+  }
+}

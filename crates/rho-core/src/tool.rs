@@ -46,5 +46,10 @@ pub trait AgentTool: Send + Sync {
         false
     }
 
-    async fn execute(&self, tool_call_id: &str, params: Value, cancel: CancellationToken) -> Result<ToolResult, ToolError>;
+    async fn execute(
+        &self,
+        tool_call_id: &str,
+        params: Value,
+        cancel: CancellationToken,
+    ) -> Result<ToolResult, ToolError>;
 }

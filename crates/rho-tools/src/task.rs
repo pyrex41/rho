@@ -81,9 +81,11 @@ impl AgentTool for TaskTool {
     }
 
     fn description(&self) -> String {
-        let mut desc = "Launch a subagent to handle a task. The subagent runs as a separate process with \
+        let mut desc =
+            "Launch a subagent to handle a task. The subagent runs as a separate process with \
          its own context. Use this for research, analysis, or delegating work that should \
-         not pollute the current conversation context.".to_string();
+         not pollute the current conversation context."
+                .to_string();
         if let Some(ref agents) = self.allowed_agents {
             desc.push_str("\n\nAvailable agents:");
             for a in agents {
@@ -195,10 +197,8 @@ impl AgentTool for TaskTool {
                     if let Some(ref json_str) = json {
                         // Skip if too large (>2MB)
                         if json_str.len() <= 2 * 1024 * 1024 {
-                            let path = std::env::temp_dir().join(format!(
-                                "rho-context-{}.json",
-                                uuid::Uuid::new_v4()
-                            ));
+                            let path = std::env::temp_dir()
+                                .join(format!("rho-context-{}.json", uuid::Uuid::new_v4()));
                             if tokio::fs::write(&path, json_str).await.is_ok() {
                                 Some(path)
                             } else {
@@ -271,9 +271,9 @@ impl AgentTool for TaskTool {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let child = cmd.spawn().map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to spawn subagent: {}", e))
-        })?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn subagent: {}", e)))?;
 
         let output: std::process::Output = tokio::select! {
             result = child.wait_with_output() => {

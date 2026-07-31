@@ -79,7 +79,10 @@ impl LlamaCppManager {
         #[cfg(unix)]
         {
             if config.provider != ProviderType::LlamaCpp {
-                bail!("ensure_running called on non-llama-cpp model '{}'", config.id);
+                bail!(
+                    "ensure_running called on non-llama-cpp model '{}'",
+                    config.id
+                );
             }
             let opts = config.llama_cpp.as_ref().with_context(|| {
                 format!(
@@ -114,6 +117,7 @@ impl LlamaCppManager {
             let (port, _pid, started_at, fresh_spawn) = {
                 let lock_file = OpenOptions::new()
                     .create(true)
+                    .truncate(false)
                     .read(true)
                     .write(true)
                     .open(&lock_path)
@@ -130,8 +134,7 @@ impl LlamaCppManager {
                         // Clean slate: spawn. Stale lockfile (dead pid) is treated as no lockfile.
                         let port = pick_free_port()?;
                         let binary = find_llama_server()?;
-                        let pid =
-                            spawn_llama_server(&binary, &gguf, port, opts, &config.model_id)?;
+                        let pid = spawn_llama_server(&binary, &gguf, port, opts, &config.model_id)?;
                         let started = SystemTime::now();
                         write_lockfile(
                             &lock_path,
@@ -303,8 +306,8 @@ fn read_lockfile(path: &Path) -> Result<Option<LockFile>> {
     if s.trim().is_empty() {
         return Ok(None);
     }
-    let lf: LockFile = toml::from_str(&s)
-        .with_context(|| format!("parse lockfile {}", path.display()))?;
+    let lf: LockFile =
+        toml::from_str(&s).with_context(|| format!("parse lockfile {}", path.display()))?;
     Ok(Some(lf))
 }
 

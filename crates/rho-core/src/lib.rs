@@ -1,6 +1,5 @@
-pub mod auth;
-pub mod session;
 pub mod agent_loop;
+pub mod auth;
 pub mod commands;
 pub mod compaction;
 pub mod config;
@@ -10,7 +9,9 @@ pub mod event_stream;
 pub mod hooks;
 pub mod memories;
 pub mod models;
+pub mod protocol;
 pub mod provider_types;
+pub mod session;
 pub mod skills;
 pub mod tool;
 pub mod types;

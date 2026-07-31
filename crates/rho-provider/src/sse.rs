@@ -137,7 +137,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_single_event() {
-        let body = bytes_stream(vec!["event: message_start\ndata: {\"type\":\"message\"}\n\n"]);
+        let body = bytes_stream(vec![
+            "event: message_start\ndata: {\"type\":\"message\"}\n\n",
+        ]);
         let mut stream = std::pin::pin!(parse_sse_stream(body));
 
         let event = stream.next().await.unwrap().unwrap();
@@ -180,9 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_comment_lines_skipped() {
-        let body = bytes_stream(vec![
-            ": this is a comment\nevent: ping\ndata: {}\n\n",
-        ]);
+        let body = bytes_stream(vec![": this is a comment\nevent: ping\ndata: {}\n\n"]);
         let mut stream = std::pin::pin!(parse_sse_stream(body));
 
         let event = stream.next().await.unwrap().unwrap();
@@ -191,9 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_data_lines() {
-        let body = bytes_stream(vec![
-            "event: test\ndata: line1\ndata: line2\n\n",
-        ]);
+        let body = bytes_stream(vec!["event: test\ndata: line1\ndata: line2\n\n"]);
         let mut stream = std::pin::pin!(parse_sse_stream(body));
 
         let event = stream.next().await.unwrap().unwrap();

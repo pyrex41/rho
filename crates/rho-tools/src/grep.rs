@@ -57,7 +57,13 @@ struct GrepSink {
 }
 
 impl GrepSink {
-    fn new(file_path: String, offset: usize, limit: usize, seen: usize, total_matches: usize) -> Self {
+    fn new(
+        file_path: String,
+        offset: usize,
+        limit: usize,
+        seen: usize,
+        total_matches: usize,
+    ) -> Self {
         Self {
             current_lines: Vec::new(),
             current_match_line: 0,
@@ -91,11 +97,7 @@ impl GrepSink {
 impl Sink for GrepSink {
     type Error = std::io::Error;
 
-    fn matched(
-        &mut self,
-        _searcher: &Searcher,
-        mat: &SinkMatch<'_>,
-    ) -> Result<bool, Self::Error> {
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
         self.seen += 1;
         if self.seen <= self.offset {
             // Before offset: skip but keep searching
@@ -152,10 +154,7 @@ impl Sink for GrepSink {
         Ok(true)
     }
 
-    fn context_break(
-        &mut self,
-        _searcher: &Searcher,
-    ) -> Result<bool, Self::Error> {
+    fn context_break(&mut self, _searcher: &Searcher) -> Result<bool, Self::Error> {
         self.flush_current_group();
         Ok(!self.at_limit())
     }
@@ -259,7 +258,10 @@ impl AgentTool for GrepTool {
             None => self.working_dir.clone(),
         };
 
-        let glob_pattern = params.get("glob").and_then(|v| v.as_str()).map(String::from);
+        let glob_pattern = params
+            .get("glob")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let context_before = params
             .get("context_before")
             .and_then(|v| v.as_u64())
@@ -276,14 +278,8 @@ impl AgentTool for GrepTool {
             .get("multiline")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let limit = params
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(50) as usize;
-        let offset = params
-            .get("offset")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+        let offset = params.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
         let working_dir = self.working_dir.clone();
 
@@ -301,8 +297,8 @@ impl AgentTool for GrepTool {
             offset,
         };
         let result = tokio::task::spawn_blocking(move || run_grep(&grep_params))
-        .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("task join error: {e}")))?;
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("task join error: {e}")))?;
 
         result
     }
@@ -439,12 +435,7 @@ fn run_grep(params: &GrepParams) -> Result<ToolResult, ToolError> {
         }
 
         // Compute line number padding width for this group
-        let max_line_num = group
-            .lines
-            .iter()
-            .map(|l| l.line_number)
-            .max()
-            .unwrap_or(0);
+        let max_line_num = group.lines.iter().map(|l| l.line_number).max().unwrap_or(0);
         let line_width = max_line_num.to_string().len();
 
         output.push_str(&format!(
@@ -477,7 +468,10 @@ fn run_grep(params: &GrepParams) -> Result<ToolResult, ToolError> {
         total_seen
     };
     if total_matches >= limit && effective_total > limit {
-        output.push_str(&format!("\n\n(showing {} of {} matches)", limit, effective_total));
+        output.push_str(&format!(
+            "\n\n(showing {} of {} matches)",
+            limit, effective_total
+        ));
     }
 
     Ok(ToolResult {
@@ -534,11 +528,7 @@ mod tests {
     async fn context_lines() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("ctx.txt");
-        fs::write(
-            &file,
-            "line1\nline2\nline3\nMATCH\nline5\nline6\nline7\n",
-        )
-        .unwrap();
+        fs::write(&file, "line1\nline2\nline3\nMATCH\nline5\nline6\nline7\n").unwrap();
 
         let tool = create_tool(dir.path());
         let params = serde_json::json!({
@@ -587,7 +577,10 @@ mod tests {
         };
 
         assert!(text.contains("code.rs"), "should match .rs file: {text}");
-        assert!(!text.contains("notes.txt"), "should not match .txt file: {text}");
+        assert!(
+            !text.contains("notes.txt"),
+            "should not match .txt file: {text}"
+        );
     }
 
     #[tokio::test]
@@ -614,7 +607,10 @@ mod tests {
 
         // All three lines should match
         let match_count = text.matches(">>").count();
-        assert_eq!(match_count, 3, "should find 3 case-insensitive matches: {text}");
+        assert_eq!(
+            match_count, 3,
+            "should find 3 case-insensitive matches: {text}"
+        );
     }
 
     #[tokio::test]
@@ -656,7 +652,10 @@ mod tests {
             Content::Text { text } => text,
             _ => panic!("expected Text"),
         };
-        assert!(text.contains("match_3"), "offset 2 should start at match_3: {text}");
+        assert!(
+            text.contains("match_3"),
+            "offset 2 should start at match_3: {text}"
+        );
         assert!(!text.contains("match_1"), "should skip match_1: {text}");
         assert!(!text.contains("match_2"), "should skip match_2: {text}");
     }
@@ -766,8 +765,14 @@ mod tests {
         };
 
         // Should only search the specific file
-        assert!(text.contains("specific.txt"), "should match in specific.txt: {text}");
-        assert!(!text.contains("other.txt"), "should not match in other.txt: {text}");
+        assert!(
+            text.contains("specific.txt"),
+            "should match in specific.txt: {text}"
+        );
+        assert!(
+            !text.contains("other.txt"),
+            "should not match in other.txt: {text}"
+        );
     }
 
     #[tokio::test]
@@ -786,7 +791,10 @@ mod tests {
 
         match err {
             ToolError::ExecutionFailed(msg) => {
-                assert!(msg.contains("not found"), "should mention path not found: {msg}");
+                assert!(
+                    msg.contains("not found"),
+                    "should mention path not found: {msg}"
+                );
             }
             other => panic!("expected ExecutionFailed, got: {other:?}"),
         }

@@ -67,9 +67,7 @@ fn check_bearer_token(state: &AppState, headers: &HeaderMap) -> Result<(), Statu
 /// Health endpoint is unauthenticated.
 macro_rules! require_auth {
     ($state:expr, $headers:expr) => {
-        if let Err(status) = check_bearer_token(&$state, &$headers) {
-            return Err(status);
-        }
+        check_bearer_token(&$state, &$headers)?;
     };
 }
 
@@ -242,14 +240,12 @@ async fn send_message(
     let stream = async_stream::stream! {
         while let Some(event) = consumer.next().await {
             let sse = match &event {
-                AgentEvent::MessageUpdate { event: stream_event, .. } => match stream_event {
-                    AssistantStreamEvent::TextDelta { delta, .. } => {
-                        Some(Event::default()
-                            .event("text_delta")
-                            .json_data(serde_json::json!({"text": delta})))
-                    }
-                    _ => None,
-                },
+                AgentEvent::MessageUpdate {
+                    event: AssistantStreamEvent::TextDelta { delta, .. },
+                    ..
+                } => Some(Event::default()
+                    .event("text_delta")
+                    .json_data(serde_json::json!({"text": delta}))),
                 AgentEvent::ToolExecutionStart { tool_call_id, tool_name, args } => {
                     Some(Event::default()
                         .event("tool_start")
