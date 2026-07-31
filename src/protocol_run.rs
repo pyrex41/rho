@@ -496,12 +496,15 @@ enum CredentialMode {
 }
 
 fn credential_mode() -> CredentialMode {
-    match std::env::var("RHO_PROTOCOL_CREDENTIAL_MODE")
-        .ok()
-        .as_deref()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
+    parse_credential_mode(
+        std::env::var("RHO_PROTOCOL_CREDENTIAL_MODE")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_credential_mode(value: Option<&str>) -> CredentialMode {
+    match value.map(str::to_ascii_lowercase).as_deref() {
         Some("off") => CredentialMode::Off,
         Some("require") => CredentialMode::Require,
         // Observe-before-enforce is the default. Invalid values also stay in
@@ -1050,6 +1053,18 @@ mod tests {
         let error =
             resolve_credential_with_mode(&request, &model, CredentialMode::Require).unwrap_err();
         assert_eq!(error, "credential_ref is required for protocol runs");
+    }
+
+    #[test]
+    fn credential_mode_ramp_defaults_to_warn_and_parses_explicit_values() {
+        assert_eq!(parse_credential_mode(None), CredentialMode::Warn);
+        assert_eq!(parse_credential_mode(Some("warn")), CredentialMode::Warn);
+        assert_eq!(parse_credential_mode(Some("OFF")), CredentialMode::Off);
+        assert_eq!(
+            parse_credential_mode(Some("require")),
+            CredentialMode::Require
+        );
+        assert_eq!(parse_credential_mode(Some("invalid")), CredentialMode::Warn);
     }
 
     #[test]
