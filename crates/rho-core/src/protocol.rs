@@ -209,13 +209,22 @@ pub fn model_from_protocol(
             configured: config.model_id.clone(),
         });
     }
-    if normalize_provider(&model.provider) != normalize_provider(&runtime.provider) {
+    let configured_provider = protocol_provider(config, &runtime.provider);
+    if normalize_provider(&model.provider) != configured_provider {
         return Err(ProtocolConversionError::ProviderMismatch {
             requested: model.provider.clone(),
-            configured: runtime.provider,
+            configured: configured_provider.to_owned(),
         });
     }
     Ok(runtime)
+}
+
+fn protocol_provider<'a>(config: &ModelConfig, runtime_provider: &'a str) -> &'a str {
+    if config.base_url.trim_end_matches('/') == "https://api.x.ai/v1" {
+        "xai"
+    } else {
+        normalize_provider(runtime_provider)
+    }
 }
 
 fn normalize_provider(provider: &str) -> &str {
@@ -363,6 +372,44 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             error,
+            ProtocolConversionError::ProviderMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn xai_openai_compatible_configs_have_xai_protocol_identity() {
+        let config = ModelConfig {
+            id: "grok".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-3".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 8_192,
+            thinking: false,
+            server_tools: None,
+            llama_cpp: None,
+        };
+        let model = model_from_protocol(
+            &wire::ModelRef {
+                provider: "xai".into(),
+                id: "grok".into(),
+            },
+            &config,
+        )
+        .unwrap();
+        assert_eq!(model.id, "grok-3");
+
+        let mismatch = model_from_protocol(
+            &wire::ModelRef {
+                provider: "openai".into(),
+                id: "grok".into(),
+            },
+            &config,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            mismatch,
             ProtocolConversionError::ProviderMismatch { .. }
         ));
     }

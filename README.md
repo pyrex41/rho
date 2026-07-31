@@ -86,6 +86,22 @@ execution grant is deny-by-default. File tools enforce canonical read/write
 roots, while Bash, web, and child-agent grants currently fail closed until
 their granular policies are implemented.
 
+`model.provider` uses the stable names `anthropic`, `openai`, or `xai`.
+`model.id` may be either a documented Rho alias (for example
+`claude-sonnet`, `gpt-5.4`, or `grok-2`) or a raw provider model ID. Aliases
+resolve to their provider wire IDs and configured endpoint; raw IDs use that
+provider's default endpoint. Credentials are resolved without entering the
+event stream:
+
+| Provider | Credential reference | Other supported auth |
+| --- | --- | --- |
+| Claude / Anthropic | `env:ANTHROPIC_API_KEY` | Claude OAuth/keychain |
+| OpenAI | `env:OPENAI_API_KEY` | — |
+| Grok / xAI | `env:XAI_API_KEY` | Grok CLI or Rho xAI OAuth |
+
+An explicit `credential_ref` must match the selected provider. Rho never
+falls back from one provider's credential to another provider.
+
 ### Options
 
 | Flag | Description | Default |

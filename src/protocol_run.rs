@@ -51,6 +51,13 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
     // request/grant contract and could be exfiltrated to the provider.
     let project_config = ProjectConfig::default();
     let model_config = model_config(&request);
+    let model = match rho_core::protocol::model_from_protocol(&request.model, &model_config) {
+        Ok(model) => model,
+        Err(error) => {
+            let _ = emitter.failure("invalid_request", error.to_string(), false);
+            return 0;
+        }
+    };
     let api_key = match resolve_credential(&request, &model_config) {
         Ok(key) => key,
         Err(error) => {
@@ -93,17 +100,10 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
         .system_prompt
         .clone()
         .unwrap_or_else(|| PROTOCOL_SYSTEM_PROMPT.to_owned());
-    let model = match rho_core::protocol::model_from_protocol(&request.model, &model_config) {
-        Ok(model) => model,
-        Err(error) => {
-            let _ = emitter.failure("invalid_request", error.to_string(), false);
-            return 0;
-        }
-    };
     let max_tokens = request
         .limits
         .max_output_tokens
-        .and_then(|value| usize::try_from(value).ok());
+        .map(|_| model_config.max_tokens);
     let config = AgentLoopConfig {
         model,
         api_key,
@@ -405,31 +405,39 @@ fn workspace(request: &protocol::RunRequest) -> Result<PathBuf, String> {
 }
 
 fn model_config(request: &protocol::RunRequest) -> ModelConfig {
-    let (provider, base_url, key_env) = match request.model.provider.as_str() {
-        "anthropic" => (ProviderType::Anthropic, String::new(), "ANTHROPIC_API_KEY"),
-        "xai" => (
-            ProviderType::XaiResponses,
-            "https://api.x.ai/v1".into(),
-            "XAI_API_KEY",
-        ),
-        _ => (ProviderType::OpenAi, String::new(), "OPENAI_API_KEY"),
+    let mut config = if let Some(config) = ModelRegistry::new().get(&request.model.id) {
+        config.clone()
+    } else {
+        let (provider, base_url, key_env) = match request.model.provider.as_str() {
+            "anthropic" => (ProviderType::Anthropic, String::new(), "ANTHROPIC_API_KEY"),
+            "xai" => (
+                ProviderType::OpenAi,
+                "https://api.x.ai/v1".into(),
+                "XAI_API_KEY",
+            ),
+            _ => (ProviderType::OpenAi, String::new(), "OPENAI_API_KEY"),
+        };
+        ModelConfig {
+            id: request.model.id.clone(),
+            provider,
+            model_id: request.model.id.clone(),
+            base_url,
+            api_key_env: Some(key_env.into()),
+            context_window: 200_000,
+            max_tokens: 8_192,
+            thinking: false,
+            server_tools: None,
+            llama_cpp: None,
+        }
     };
-    ModelConfig {
-        id: request.model.id.clone(),
-        provider,
-        model_id: request.model.id.clone(),
-        base_url,
-        api_key_env: Some(key_env.into()),
-        context_window: 200_000,
-        max_tokens: request
-            .limits
-            .max_output_tokens
-            .and_then(|v| usize::try_from(v).ok())
-            .unwrap_or(8_192),
-        thinking: false,
-        server_tools: None,
-        llama_cpp: None,
+    if let Some(requested) = request
+        .limits
+        .max_output_tokens
+        .and_then(|value| usize::try_from(value).ok())
+    {
+        config.max_tokens = config.max_tokens.min(requested);
     }
+    config
 }
 
 fn resolve_credential(
@@ -711,6 +719,30 @@ mod tests {
     use super::*;
     use rho_core::hooks::PreToolUseHook;
 
+    fn hosted_request(provider: &str, model: &str) -> protocol::RunRequest {
+        protocol::RunRequest::new(
+            "run",
+            protocol::ModelRef {
+                provider: provider.into(),
+                id: model.into(),
+            },
+            vec![],
+            protocol::ExecutionGrant {
+                grant_id: "g".into(),
+                expires_at: "2999-01-01T00:00:00Z".into(),
+                providers: vec![provider.into()],
+                models: vec![model.into()],
+                tools: Default::default(),
+                read_roots: vec![],
+                write_roots: vec![],
+                network: Default::default(),
+                witness: None,
+                command_policy_ref: None,
+                command_rules: vec![],
+            },
+        )
+    }
+
     #[test]
     fn wildcard_grants_match_prefix_and_suffix() {
         assert!(glob_match("claude-*", "claude-sonnet-4-5"));
@@ -869,5 +901,34 @@ mod tests {
             redact_tool_arguments("write", &json!({"path": "a", "content": "private source"}),),
             json!({"path": "a", "content_redacted": true})
         );
+    }
+
+    #[test]
+    fn documented_model_aliases_resolve_to_provider_wire_ids() {
+        let claude = model_config(&hosted_request("anthropic", "claude-sonnet"));
+        assert_eq!(claude.model_id, "claude-sonnet-4-6");
+        assert_eq!(claude.provider, ProviderType::Anthropic);
+
+        let openai = model_config(&hosted_request("openai", "gpt-5.4"));
+        assert_eq!(openai.model_id, "gpt-5.4");
+        assert_eq!(openai.provider, ProviderType::OpenAi);
+
+        let grok = model_config(&hosted_request("xai", "grok-2"));
+        assert_eq!(grok.model_id, "grok-2-1212");
+        assert_eq!(grok.provider, ProviderType::OpenAi);
+        assert_eq!(grok.base_url, "https://api.x.ai/v1");
+    }
+
+    #[test]
+    fn raw_model_ids_remain_supported_and_output_limit_is_capped() {
+        let mut request = hosted_request("xai", "grok-future");
+        request.limits.max_output_tokens = Some(999_999);
+        let config = model_config(&request);
+        assert_eq!(config.model_id, "grok-future");
+        assert_eq!(config.provider, ProviderType::OpenAi);
+        assert_eq!(config.max_tokens, 8_192);
+
+        request.limits.max_output_tokens = Some(2_048);
+        assert_eq!(model_config(&request).max_tokens, 2_048);
     }
 }

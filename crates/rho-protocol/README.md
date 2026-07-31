@@ -42,3 +42,13 @@ calls/results, usage, completion, failure, cancellation, and artifacts.
 
 The embedding engine remains responsible for checking grant expiry, resolving
 canonical roots, enforcing effects, applying limits, and redacting event data.
+
+## Rho CLI provider mapping
+
+The protocol keeps provider and model identifiers open, while the Rho CLI's
+`rho.run/v1` engine currently supports `anthropic`, `openai`, and `xai`.
+Documented Rho model aliases are resolved before making the provider request;
+raw model IDs remain valid. In particular, xAI models registered for its
+OpenAI-compatible chat endpoint retain the protocol identity `xai` rather than
+being misreported as OpenAI. This distinction also selects `XAI_API_KEY` and
+prevents cross-provider credential references.
