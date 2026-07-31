@@ -252,7 +252,6 @@ pub enum Message {
         result: Result<Option<String>, String>,
     },
     DisconnectProvider(AuthProvider),
-    Noop,
 }
 
 impl RhoApp {
@@ -897,7 +896,6 @@ impl RhoApp {
                 }
                 IcedTask::none()
             }
-            Message::Noop => IcedTask::none(),
         }
     }
 

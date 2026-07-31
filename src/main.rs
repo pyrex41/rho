@@ -19,6 +19,7 @@ use rho_core::types::*;
 mod autoresearch;
 mod llama_ux;
 mod loop_runner;
+mod protocol_run;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OutputFormat {
@@ -126,6 +127,16 @@ enum AuthCommands {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Execute a bounded rho.run/v1 request and emit protocol events.
+    Run {
+        /// JSON request file, or '-' to read one JSON document from stdin.
+        #[arg(long, value_name = "PATH")]
+        request_file: PathBuf,
+
+        /// Event stream encoding (currently only jsonl).
+        #[arg(long, default_value = "jsonl", value_parser = ["jsonl"])]
+        events: String,
+    },
     /// Manage Anthropic authentication (login, token, status)
     Auth {
         #[command(subcommand)]
@@ -827,6 +838,15 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Some(Commands::Run {
+            request_file,
+            events,
+        }) => {
+            let code = protocol_run::run(&request_file, &events).await;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
         Some(Commands::Auth { command }) => {
             match command {
                 AuthCommands::Login => match rho_core::auth::oauth::login().await {

@@ -286,17 +286,16 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
         while let Some(event) = consumer.next().await {
             if json {
                 match event {
-                    AgentEvent::MessageUpdate { event, .. } => {
-                        if let AssistantStreamEvent::TextDelta { delta, .. } = event {
-                            println!(
-                                "{}",
-                                serde_json::json!({
-                                    "type": "text_delta",
-                                    "text": delta
-                                })
-                            );
-                        }
-                    }
+                    AgentEvent::MessageUpdate {
+                        event: AssistantStreamEvent::TextDelta { delta, .. },
+                        ..
+                    } => println!(
+                        "{}",
+                        serde_json::json!({
+                            "type": "text_delta",
+                            "text": delta
+                        })
+                    ),
                     AgentEvent::ToolExecutionStart {
                         tool_call_id,
                         tool_name,
@@ -381,11 +380,10 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
                 }
             } else {
                 match event {
-                    AgentEvent::MessageUpdate { event, .. } => {
-                        if let AssistantStreamEvent::TextDelta { delta, .. } = event {
-                            eprint!("{}", delta);
-                        }
-                    }
+                    AgentEvent::MessageUpdate {
+                        event: AssistantStreamEvent::TextDelta { delta, .. },
+                        ..
+                    } => eprint!("{}", delta),
                     AgentEvent::ToolExecutionStart {
                         tool_name, args, ..
                     } => {

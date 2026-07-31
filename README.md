@@ -65,9 +65,26 @@ The GUI provides an interactive chat with model selection, history, and visual t
 
 ```
 rho-cli [OPTIONS] [PROMPT]
+rho-cli run --request-file <PATH|-> --events jsonl
 rho-cli loop [OPTIONS]
 rho-cli autoresearch --benchmark <CMD> --metric <NAME> [OPTIONS]
 ```
+
+### Embedded execution protocol
+
+Hosts such as task schedulers and durable orchestrators can submit one bounded
+[`rho.run/v1`](crates/rho-protocol/README.md) request and consume flushed JSONL
+events without scraping the human CLI:
+
+```bash
+rho-cli run --request-file request.json --events jsonl
+cat request.json | rho-cli run --request-file - --events jsonl
+```
+
+Protocol stdout contains events only; diagnostics are written to stderr. The
+execution grant is deny-by-default. File tools enforce canonical read/write
+roots, while Bash, web, and child-agent grants currently fail closed until
+their granular policies are implemented.
 
 ### Options
 

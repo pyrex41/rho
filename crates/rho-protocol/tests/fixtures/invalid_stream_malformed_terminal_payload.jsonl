@@ -1,0 +1,2 @@
+{"protocol":"rho.run/v1","run_id":"fixture-run-1","seq":1,"time":"2026-07-31T20:00:00Z","type":"run.started","data":{}}
+{"protocol":"rho.run/v1","run_id":"fixture-run-1","seq":2,"time":"2026-07-31T20:00:01Z","type":"run.failed","data":{"message":"required code and retryable fields are absent"}}

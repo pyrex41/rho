@@ -3603,6 +3603,7 @@ name = "rho-agent"
 version = "0.8.4"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "futures",
@@ -3610,6 +3611,7 @@ dependencies = [
  "open",
  "regex",
  "rho-core",
+ "rho-protocol",
  "rho-provider",
  "rho-server",
  "rho-tools",
@@ -3633,6 +3635,7 @@ dependencies = [
  "futures",
  "open",
  "reqwest",
+ "rho-protocol",
  "rusqlite",
  "serde",
  "serde_json",

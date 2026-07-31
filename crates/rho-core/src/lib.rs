@@ -9,6 +9,7 @@ pub mod event_stream;
 pub mod hooks;
 pub mod memories;
 pub mod models;
+pub mod protocol;
 pub mod provider_types;
 pub mod session;
 pub mod skills;

@@ -1,0 +1,20 @@
+{
+  "protocol": "rho.run/v1",
+  "run_id": "fixture-run-1",
+  "model": { "provider": "anthropic", "id": "claude-sonnet-4-5" },
+  "input": [
+    { "role": "user", "content": [{ "type": "text", "text": "Inspect the workspace." }] }
+  ],
+  "limits": { "max_turns": 4, "max_output_tokens": 2048 },
+  "grant": {
+    "grant_id": "fixture-grant-1",
+    "expires_at": "2030-01-01T00:00:00Z",
+    "providers": ["anthropic"],
+    "models": ["claude-*"],
+    "tools": ["read"],
+    "read_roots": ["/workspace"],
+    "write_roots": [],
+    "network": { "mode": "provider_only" }
+  },
+  "context": { "ticket_id": "T-fixture" }
+}
