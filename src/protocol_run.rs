@@ -204,9 +204,17 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
                 tool_name,
                 partial_result,
             } => {
+                // Tool results can contain file contents, command output, or
+                // credentials. JSONL is an audit stream, not a data channel:
+                // expose only bounded metadata and never serialize content.
                 let _ = emitter.event(
                     "tool.output.delta",
-                    &json!({"call_id": tool_call_id, "tool": tool_name, "output": content_value(&partial_result.content)}),
+                    &tool_output_audit_data(
+                        &tool_call_id,
+                        &tool_name,
+                        &partial_result.content,
+                        None,
+                    ),
                 );
             }
             core::AgentEvent::ToolExecutionEnd {
@@ -217,7 +225,12 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
             } => {
                 let _ = emitter.event(
                     "tool.completed",
-                    &json!({"call_id": tool_call_id, "tool": tool_name, "ok": !is_error, "output": content_value(&result.content), "details": result.details}),
+                    &tool_output_audit_data(
+                        &tool_call_id,
+                        &tool_name,
+                        &result.content,
+                        Some((!is_error, &result.details)),
+                    ),
                 );
             }
             core::AgentEvent::ContextCompacted {
@@ -467,11 +480,138 @@ fn resolve_credential(
                 }
             });
     }
-    ModelRegistry::resolve_api_key(model).map_err(|e| e.to_string())
+    // Protocol runs must be self-contained and auditable. Falling back to
+    // ModelRegistry here would implicitly consume ambient environment,
+    // keychain, or config credentials that were not authorized by the
+    // request producer. Every hosted run therefore needs an explicit,
+    // provider-checked credential_ref.
+    resolve_credential_with_mode(request, model, credential_mode())
 }
 
-fn content_value(content: &[core::Content]) -> Value {
-    serde_json::to_value(content).unwrap_or(Value::Null)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CredentialMode {
+    Off,
+    Warn,
+    Require,
+}
+
+fn credential_mode() -> CredentialMode {
+    match std::env::var("RHO_PROTOCOL_CREDENTIAL_MODE")
+        .ok()
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("off") => CredentialMode::Off,
+        Some("require") => CredentialMode::Require,
+        // Observe-before-enforce is the default. Invalid values also stay in
+        // warn mode so upgrading a deployment cannot silently lock it out.
+        _ => CredentialMode::Warn,
+    }
+}
+
+fn resolve_credential_with_mode(
+    request: &protocol::RunRequest,
+    model: &ModelConfig,
+    mode: CredentialMode,
+) -> Result<String, String> {
+    match mode {
+        CredentialMode::Require => {
+            // Protocol runs must be self-contained and auditable. Falling
+            // back to ModelRegistry here would implicitly consume ambient
+            // environment, keychain, or config credentials that were not
+            // authorized by the request producer.
+            Err("credential_ref is required for protocol runs".into())
+        }
+        CredentialMode::Warn => {
+            eprintln!(
+                "warning: protocol request {} has no credential_ref; using ambient credential because RHO_PROTOCOL_CREDENTIAL_MODE=warn",
+                request.run_id
+            );
+            ModelRegistry::resolve_api_key(model).map_err(|e| e.to_string())
+        }
+        CredentialMode::Off => ModelRegistry::resolve_api_key(model).map_err(|e| e.to_string()),
+    }
+}
+
+const MAX_AUDIT_BYTES: u64 = 1_048_576;
+
+fn bounded_json_bytes(value: &Value) -> u64 {
+    serde_json::to_vec(value)
+        .map(|bytes| (bytes.len() as u64).min(MAX_AUDIT_BYTES))
+        .unwrap_or(MAX_AUDIT_BYTES)
+}
+
+fn content_audit(content: &[core::Content]) -> Value {
+    let mut bytes = 0_u64;
+    let mut text_blocks = 0_u64;
+    let mut thinking_blocks = 0_u64;
+    let mut image_blocks = 0_u64;
+    let mut tool_call_blocks = 0_u64;
+    for block in content {
+        match block {
+            core::Content::Text { text } => {
+                text_blocks += 1;
+                bytes = bytes.saturating_add(text.len() as u64).min(MAX_AUDIT_BYTES);
+            }
+            core::Content::Thinking { thinking } => {
+                thinking_blocks += 1;
+                bytes = bytes
+                    .saturating_add(thinking.len() as u64)
+                    .min(MAX_AUDIT_BYTES);
+            }
+            core::Content::Image { data, mime_type } => {
+                image_blocks += 1;
+                bytes = bytes
+                    .saturating_add(data.len() as u64)
+                    .saturating_add(mime_type.len() as u64)
+                    .min(MAX_AUDIT_BYTES);
+            }
+            core::Content::ToolCall {
+                id,
+                name,
+                arguments,
+            } => {
+                tool_call_blocks += 1;
+                bytes = bytes
+                    .saturating_add(id.len() as u64)
+                    .saturating_add(name.len() as u64)
+                    .saturating_add(bounded_json_bytes(arguments))
+                    .min(MAX_AUDIT_BYTES);
+            }
+        }
+    }
+    json!({
+        "blocks": content.len().min(MAX_AUDIT_BYTES as usize),
+        "bytes": bytes,
+        "text_blocks": text_blocks,
+        "thinking_blocks": thinking_blocks,
+        "image_blocks": image_blocks,
+        "tool_call_blocks": tool_call_blocks,
+    })
+}
+
+fn tool_output_audit_data(
+    call_id: &str,
+    tool: &str,
+    content: &[core::Content],
+    completion: Option<(bool, &Value)>,
+) -> Value {
+    let mut data = json!({
+        "call_id": call_id,
+        "tool": tool,
+        "audit": content_audit(content),
+    });
+    if let Some((ok, details)) = completion {
+        let object = data.as_object_mut().expect("audit data is an object");
+        object.insert("ok".into(), Value::Bool(ok));
+        object.insert("details_present".into(), Value::Bool(!details.is_null()));
+        object.insert(
+            "details_bytes".into(),
+            Value::from(bounded_json_bytes(details)),
+        );
+    }
+    data
 }
 
 fn redact_tool_arguments(tool_name: &str, arguments: &Value) -> Value {
@@ -901,6 +1041,32 @@ mod tests {
             redact_tool_arguments("write", &json!({"path": "a", "content": "private source"}),),
             json!({"path": "a", "content_redacted": true})
         );
+    }
+
+    #[test]
+    fn protocol_credentials_never_fall_back_to_ambient_resolution() {
+        let request = hosted_request("anthropic", "claude-test");
+        let model = model_config(&request);
+        let error =
+            resolve_credential_with_mode(&request, &model, CredentialMode::Require).unwrap_err();
+        assert_eq!(error, "credential_ref is required for protocol runs");
+    }
+
+    #[test]
+    fn tool_output_events_are_bounded_audit_metadata() {
+        let content = vec![core::Content::Text {
+            text: "TOP-SECRET file contents".into(),
+        }];
+        let details = json!({"secret": "TOP-SECRET details"});
+        let data = tool_output_audit_data("call", "read", &content, Some((true, &details)));
+        let encoded = serde_json::to_string(&data).unwrap();
+        assert!(!encoded.contains("TOP-SECRET"));
+        assert!(!data.get("output").is_some());
+        assert!(!data.get("content").is_some());
+        assert!(!data.get("details").is_some());
+        assert_eq!(data["audit"]["bytes"], json!(24));
+        assert_eq!(data["details_present"], json!(true));
+        assert!(data["details_bytes"].as_u64().unwrap() > 0);
     }
 
     #[test]

@@ -43,6 +43,25 @@ calls/results, usage, completion, failure, cancellation, and artifacts.
 The embedding engine remains responsible for checking grant expiry, resolving
 canonical roots, enforcing effects, applying limits, and redacting event data.
 
+### CLI credential mode and audit events
+
+Protocol execution resolves a credential named by `credential_ref` (currently
+an `env:` reference). When the field is absent, `RHO_PROTOCOL_CREDENTIAL_MODE`
+controls the migration ramp: `warn` is the default and records a stderr
+warning before using the legacy ambient resolver, `off` keeps the legacy
+behavior without a warning, and `require` fails closed with a typed
+`credential_unavailable` terminal event. A managed caller should set
+`RHO_PROTOCOL_CREDENTIAL_MODE=require` before relying on request-scoped
+authority.
+
+Tool output events are bounded audit metadata only (block/byte counts and
+completion status); raw tool content and `details` are never copied into the
+JSONL stream. The path grant hook canonicalizes a path before tool execution,
+but cannot close a symlink-swap check/use race while tools use ordinary path
+I/O. Treat concurrent hostile filesystem writers as an honest residual until
+tool I/O is descriptor-relative and uses no-follow semantics; that is the
+condition for removing this residual.
+
 ## Rho CLI provider mapping
 
 The protocol keeps provider and model identifiers open, while the Rho CLI's
