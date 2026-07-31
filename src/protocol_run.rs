@@ -1,4 +1,6 @@
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,10 +10,12 @@ use chrono::{DateTime, Utc};
 use rho_core::agent_loop::{agent_loop, AgentLoopConfig};
 use rho_core::config::ProjectConfig;
 use rho_core::models::{ModelConfig, ModelRegistry, ProviderType};
+use rho_core::tool::{AgentTool, ToolError};
 use rho_core::types as core;
 use rho_protocol as protocol;
 use serde::Serialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 use crate::build_tools;
@@ -30,6 +34,10 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
     };
 
     let mut emitter = Emitter::new(request.run_id.clone());
+    if let Err(error) = verify_grant_witness(&request, grant_witness_mode()) {
+        let _ = emitter.failure("grant_denied", error, false);
+        return 0;
+    }
     if let Err(error) = preflight(&request) {
         let _ = emitter.failure("grant_denied", error, false);
         return 0;
@@ -75,6 +83,13 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
 
     let allowed = Some(request.grant.tools.tools.clone());
     let tools = build_tools(&cwd, &allowed, &project_config);
+    let tools = match capability_tools(tools, &request, &cwd) {
+        Ok(tools) => tools,
+        Err(error) => {
+            let _ = emitter.failure("grant_denied", error, false);
+            return 0;
+        }
+    };
     let enabled_tools: Vec<String> = tools.iter().map(|tool| tool.name().to_owned()).collect();
     if enabled_tools.len() != request.grant.tools.tools.len() {
         let unknown: Vec<_> = request
@@ -116,7 +131,7 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
         get_follow_up_messages: None,
         transform_messages: None,
         post_tools_hooks: vec![],
-        pre_tool_hooks: vec![Arc::new(PathGrantHook::new(&request, &cwd))],
+        pre_tool_hooks: vec![],
         lifecycle_hooks: vec![],
         shared_messages: None,
     };
@@ -361,10 +376,118 @@ fn preflight(request: &protocol::RunRequest) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrantWitnessMode {
+    Off,
+    Warn,
+    Require,
+}
+
+fn grant_witness_mode() -> GrantWitnessMode {
+    parse_grant_witness_mode(std::env::var("RHO_PROTOCOL_GRANT_MODE").ok().as_deref())
+}
+
+fn parse_grant_witness_mode(value: Option<&str>) -> GrantWitnessMode {
+    match value.map(str::to_ascii_lowercase).as_deref() {
+        Some("off") => GrantWitnessMode::Off,
+        Some("require") => GrantWitnessMode::Require,
+        _ => GrantWitnessMode::Warn,
+    }
+}
+
+fn canonical_unsigned_request(request: &protocol::RunRequest) -> Result<Vec<u8>, String> {
+    let mut value = serde_json::to_value(request).map_err(|e| e.to_string())?;
+    let grant = value
+        .get_mut("grant")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "grant is not an object".to_string())?;
+    grant.remove("witness");
+    serde_json::to_vec(&value).map_err(|e| e.to_string())
+}
+
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    const BLOCK: usize = 64;
+    let mut normalized = [0_u8; BLOCK];
+    if key.len() > BLOCK {
+        normalized[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        normalized[..key.len()].copy_from_slice(key);
+    }
+    let mut inner_key = [0x36_u8; BLOCK];
+    let mut outer_key = [0x5c_u8; BLOCK];
+    for i in 0..BLOCK {
+        inner_key[i] ^= normalized[i];
+        outer_key[i] ^= normalized[i];
+    }
+    let inner = Sha256::new()
+        .chain_update(inner_key)
+        .chain_update(message)
+        .finalize();
+    let result = Sha256::new()
+        .chain_update(outer_key)
+        .chain_update(inner)
+        .finalize();
+    result.into()
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn verify_grant_witness(
+    request: &protocol::RunRequest,
+    mode: GrantWitnessMode,
+) -> Result<(), String> {
+    let key = std::env::var("RHO_PROTOCOL_GRANT_KEY").ok();
+    verify_grant_witness_with_key(request, mode, key.as_deref())
+}
+
+fn verify_grant_witness_with_key(
+    request: &protocol::RunRequest,
+    mode: GrantWitnessMode,
+    key: Option<&str>,
+) -> Result<(), String> {
+    let Some(witness) = request.grant.witness.as_deref() else {
+        return match mode {
+            GrantWitnessMode::Require => Err("signed grant witness is required".into()),
+            GrantWitnessMode::Warn => {
+                eprintln!(
+                    "warning: protocol request {} has no signed grant witness; RHO_PROTOCOL_GRANT_MODE=warn",
+                    request.run_id
+                );
+                Ok(())
+            }
+            GrantWitnessMode::Off => Ok(()),
+        };
+    };
+    let supplied = witness
+        .strip_prefix("hmac-sha256:")
+        .ok_or_else(|| "grant witness uses an unsupported scheme".to_string())?;
+    let key = key.ok_or_else(|| "RHO_PROTOCOL_GRANT_KEY is unavailable".to_string())?;
+    if key.is_empty() {
+        return Err("RHO_PROTOCOL_GRANT_KEY is empty".into());
+    }
+    let expected = hex_digest(&hmac_sha256(
+        key.as_bytes(),
+        &canonical_unsigned_request(request)?,
+    ));
+    if supplied.len() != expected.len()
+        || supplied
+            .bytes()
+            .zip(expected.bytes())
+            .fold(0_u8, |diff, (left, right)| diff | (left ^ right))
+            != 0
+    {
+        return Err("grant witness does not authenticate this request".into());
+    }
+    Ok(())
+}
+
 fn validate_supported_tools(request: &protocol::RunRequest) -> Result<(), String> {
     for tool in &request.grant.tools.tools {
         match tool.as_str() {
-            "read" | "write" | "edit" | "grep" | "find" => {}
+            "read" | "write" | "edit" => {}
+            "grep" | "find" => return Err(format!("{tool} grants are not supported until recursive traversal uses capability-relative I/O")),
             "bash" => return Err("bash grants are not supported until command_rules can be enforced against shell commands".into()),
             "web_fetch" | "web_search" => return Err(format!("{tool} grants are not supported until network destination policy is enforced")),
             "task" => return Err("task grants are not supported because child capabilities cannot yet be narrowed".into()),
@@ -392,6 +515,162 @@ fn validate_supported_tools(request: &protocol::RunRequest) -> Result<(), String
         return Err("read, grep, and find tools require a non-empty read_roots grant".into());
     }
     Ok(())
+}
+
+struct CapabilityTool {
+    inner: Arc<dyn AgentTool>,
+    cwd: PathBuf,
+    read_roots: Vec<(PathBuf, Arc<cap_std::fs::Dir>)>,
+    write_roots: Vec<(PathBuf, Arc<cap_std::fs::Dir>)>,
+}
+
+fn capability_roots(paths: &[String]) -> Result<Vec<(PathBuf, Arc<cap_std::fs::Dir>)>, String> {
+    paths
+        .iter()
+        .map(|path| {
+            let canonical = std::fs::canonicalize(path)
+                .map_err(|e| format!("invalid granted root {path}: {e}"))?;
+            let dir = cap_std::fs::Dir::open_ambient_dir(&canonical, cap_std::ambient_authority())
+                .map_err(|e| format!("cannot open granted root {}: {e}", canonical.display()))?;
+            Ok((canonical, Arc::new(dir)))
+        })
+        .collect()
+}
+
+fn capability_tools(
+    tools: Vec<Arc<dyn AgentTool>>,
+    request: &protocol::RunRequest,
+    cwd: &Path,
+) -> Result<Vec<Arc<dyn AgentTool>>, String> {
+    #[cfg(not(unix))]
+    if !tools.is_empty() {
+        return Err("protocol file tools require descriptor-relative I/O on this platform".into());
+    }
+    let read_roots = capability_roots(&request.grant.read_roots)?;
+    let write_roots = capability_roots(&request.grant.write_roots)?;
+    Ok(tools
+        .into_iter()
+        .map(|inner| {
+            Arc::new(CapabilityTool {
+                inner,
+                cwd: cwd.to_path_buf(),
+                read_roots: read_roots.clone(),
+                write_roots: write_roots.clone(),
+            }) as Arc<dyn AgentTool>
+        })
+        .collect())
+}
+
+impl CapabilityTool {
+    #[cfg(unix)]
+    fn open_capability(&self, path: &str) -> Result<std::fs::File, ToolError> {
+        let candidate = if Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
+            self.cwd.join(path)
+        };
+        let writing = matches!(self.inner.name(), "write" | "edit");
+        let roots = if writing {
+            &self.write_roots
+        } else {
+            &self.read_roots
+        };
+        for (root, dir) in roots {
+            let Ok(relative) = candidate.strip_prefix(root) else {
+                continue;
+            };
+            let result = if self.inner.name() == "write" {
+                if let Some(parent) = relative.parent() {
+                    dir.create_dir_all(parent).map_err(|e| {
+                        ToolError::ExecutionFailed(format!("capability create failed: {e}"))
+                    })?;
+                }
+                let mut options = cap_std::fs::OpenOptions::new();
+                options.read(true).write(true).create(true);
+                dir.open_with(relative, &options)
+            } else if self.inner.name() == "edit" {
+                let mut options = cap_std::fs::OpenOptions::new();
+                options.read(true).write(true);
+                dir.open_with(relative, &options)
+            } else {
+                dir.open(relative)
+            };
+            return result
+                .map(cap_std::fs::File::into_std)
+                .map_err(|e| ToolError::ExecutionFailed(format!("capability open denied: {e}")));
+        }
+        Err(ToolError::ExecutionFailed(
+            "path is outside the granted capability roots".into(),
+        ))
+    }
+}
+
+#[async_trait]
+impl AgentTool for CapabilityTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn label(&self) -> String {
+        self.inner.label()
+    }
+    fn description(&self) -> String {
+        self.inner.description()
+    }
+    fn parameters_schema(&self) -> Value {
+        self.inner.parameters_schema()
+    }
+    fn is_concurrent_safe(&self) -> bool {
+        self.inner.is_concurrent_safe()
+    }
+    fn is_deferrable(&self) -> bool {
+        self.inner.is_deferrable()
+    }
+
+    async fn execute(
+        &self,
+        tool_call_id: &str,
+        mut params: Value,
+        cancel: CancellationToken,
+    ) -> Result<core::ToolResult, ToolError> {
+        #[cfg(not(unix))]
+        return Err(ToolError::ExecutionFailed(
+            "capability file tools are unavailable on this platform".into(),
+        ));
+        #[cfg(unix)]
+        {
+            let key = if self.inner.name() == "edit" {
+                "file_path"
+            } else {
+                "path"
+            };
+            let original = params
+                .get(key)
+                .or_else(|| params.get("path"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolError::InvalidParameters("missing path".into()))?
+                .to_owned();
+            if self.inner.name() == "write" && !params.get("content").is_some_and(Value::is_string)
+            {
+                return Err(ToolError::InvalidParameters(
+                    "missing or invalid 'content' parameter".into(),
+                ));
+            }
+            let file = self.open_capability(&original)?;
+            let descriptor_path = format!("/dev/fd/{}", file.as_raw_fd());
+            params[key] = Value::String(descriptor_path);
+            let result = self.inner.execute(tool_call_id, params, cancel).await;
+            drop(file);
+            if result.is_ok() && matches!(self.inner.name(), "write" | "edit") {
+                let original_path = if Path::new(&original).is_absolute() {
+                    PathBuf::from(&original)
+                } else {
+                    self.cwd.join(&original)
+                };
+                rho_tools::git_helpers::auto_commit_file(&original_path, self.inner.name()).await;
+            }
+            result
+        }
+    }
 }
 
 fn workspace(request: &protocol::RunRequest) -> Result<PathBuf, String> {
@@ -721,90 +1000,6 @@ fn glob_match(pattern: &str, value: &str) -> bool {
     }
 }
 
-struct PathGrantHook {
-    cwd: PathBuf,
-    read_roots: Vec<PathBuf>,
-    write_roots: Vec<PathBuf>,
-}
-
-impl PathGrantHook {
-    fn new(request: &protocol::RunRequest, cwd: &Path) -> Self {
-        Self {
-            cwd: cwd.to_path_buf(),
-            read_roots: canonical_roots(&request.grant.read_roots),
-            write_roots: canonical_roots(&request.grant.write_roots),
-        }
-    }
-
-    fn allowed(&self, path: &str, roots: &[PathBuf]) -> bool {
-        let path = Path::new(path);
-        let candidate = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.cwd.join(path)
-        };
-        let checked = if candidate.exists() {
-            std::fs::canonicalize(&candidate).ok()
-        } else {
-            candidate
-                .parent()
-                .and_then(|parent| std::fs::canonicalize(parent).ok())
-                .and_then(|parent| candidate.file_name().map(|name| parent.join(name)))
-        };
-        checked.is_some_and(|path| roots.iter().any(|root| path.starts_with(root)))
-    }
-}
-
-#[async_trait]
-impl rho_core::hooks::PreToolUseHook for PathGrantHook {
-    fn name(&self) -> &str {
-        "protocol-path-grant"
-    }
-
-    async fn execute(
-        &self,
-        tool_name: &str,
-        args: &Value,
-        _cancel: CancellationToken,
-    ) -> rho_core::hooks::PreToolUseResult {
-        let (roots, path) = match tool_name {
-            "write" => (&self.write_roots, args.get("path").and_then(Value::as_str)),
-            "edit" => (
-                &self.write_roots,
-                args.get("file_path")
-                    .or_else(|| args.get("path"))
-                    .and_then(Value::as_str),
-            ),
-            "read" | "grep" => (&self.read_roots, args.get("path").and_then(Value::as_str)),
-            "find" => (&self.read_roots, Some(".")),
-            _ => {
-                return rho_core::hooks::PreToolUseResult::Deny {
-                    reason: format!("tool {tool_name:?} has no protocol path policy"),
-                }
-            }
-        };
-        let Some(path) = path else {
-            return rho_core::hooks::PreToolUseResult::Deny {
-                reason: format!("tool {tool_name:?} did not supply a path for authorization"),
-            };
-        };
-        if self.allowed(path, roots) {
-            rho_core::hooks::PreToolUseResult::Allow
-        } else {
-            rho_core::hooks::PreToolUseResult::Deny {
-                reason: format!("path {path:?} is outside the execution grant"),
-            }
-        }
-    }
-}
-
-fn canonical_roots(roots: &[String]) -> Vec<PathBuf> {
-    roots
-        .iter()
-        .filter_map(|root| std::fs::canonicalize(root).ok())
-        .collect()
-}
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -860,7 +1055,6 @@ impl Emitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rho_core::hooks::PreToolUseHook;
 
     fn hosted_request(provider: &str, model: &str) -> protocol::RunRequest {
         protocol::RunRequest::new(
@@ -943,46 +1137,61 @@ mod tests {
             .contains("child capabilities"));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn path_hook_distinguishes_read_and_write_roots() {
+    fn capability_handle_survives_symlink_swap_without_escaping() {
+        use std::os::unix::fs::symlink;
+
         let temp = tempfile::tempdir().unwrap();
-        let read = temp.path().join("read");
-        let write = temp.path().join("write");
-        std::fs::create_dir_all(&read).unwrap();
-        std::fs::create_dir_all(&write).unwrap();
-        let hook = PathGrantHook {
-            cwd: temp.path().into(),
-            read_roots: vec![std::fs::canonicalize(&read).unwrap()],
-            write_roots: vec![std::fs::canonicalize(&write).unwrap()],
+        let root = temp.path().join("root");
+        let outside = temp.path().join("outside-secret");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("allowed"), "allowed").unwrap();
+        std::fs::write(&outside, "SECRET").unwrap();
+        let link = root.join("link");
+        symlink("allowed", &link).unwrap();
+
+        let dir = cap_std::fs::Dir::open_ambient_dir(&root, cap_std::ambient_authority()).unwrap();
+        let tool = CapabilityTool {
+            inner: Arc::new(rho_tools::read::ReadTool::with_cwd(root.clone())),
+            cwd: root.clone(),
+            read_roots: vec![(root.clone(), Arc::new(dir))],
+            write_roots: vec![],
         };
-        assert!(hook.allowed(read.join("a").to_str().unwrap(), &hook.read_roots));
-        assert!(!hook.allowed(read.join("a").to_str().unwrap(), &hook.write_roots));
-        assert!(hook.allowed(write.join("a").to_str().unwrap(), &hook.write_roots));
+        let mut handle = tool.open_capability(link.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&link).unwrap();
+        symlink(&outside, &link).unwrap();
+
+        let mut content = String::new();
+        handle.read_to_string(&mut content).unwrap();
+        assert_eq!(content, "allowed");
+        assert_ne!(content, "SECRET");
+        assert!(tool.open_capability(link.to_str().unwrap()).is_err());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
-    async fn edit_authorizes_file_path_not_the_workspace_default() {
+    async fn capability_write_executes_through_the_open_handle() {
         let temp = tempfile::tempdir().unwrap();
-        let write = temp.path().join("write");
-        let outside = temp.path().join("outside");
-        std::fs::create_dir_all(&write).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
-        let hook = PathGrantHook {
-            cwd: write.clone(),
+        let root = temp.path().to_path_buf();
+        let dir = cap_std::fs::Dir::open_ambient_dir(&root, cap_std::ambient_authority()).unwrap();
+        let tool = CapabilityTool {
+            inner: Arc::new(rho_tools::write::WriteTool::with_cwd(root.clone())),
+            cwd: root.clone(),
             read_roots: vec![],
-            write_roots: vec![std::fs::canonicalize(&write).unwrap()],
+            write_roots: vec![(root.clone(), Arc::new(dir))],
         };
-        let result = hook
-            .execute(
-                "edit",
-                &json!({"file_path": outside.join("secret")}),
-                CancellationToken::new(),
-            )
-            .await;
-        assert!(matches!(
-            result,
-            rho_core::hooks::PreToolUseResult::Deny { .. }
-        ));
+        tool.execute(
+            "call",
+            json!({"path": root.join("nested/file.txt"), "content": "bounded"}),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("nested/file.txt")).unwrap(),
+            "bounded"
+        );
     }
 
     #[test]
@@ -1065,6 +1274,43 @@ mod tests {
             CredentialMode::Require
         );
         assert_eq!(parse_credential_mode(Some("invalid")), CredentialMode::Warn);
+    }
+
+    #[test]
+    fn grant_witness_binds_the_entire_request() {
+        let key = "deployment-secret";
+        let mut request = hosted_request("anthropic", "claude-test");
+        let signature = hex_digest(&hmac_sha256(
+            key.as_bytes(),
+            &canonical_unsigned_request(&request).unwrap(),
+        ));
+        request.grant.witness = Some(format!("hmac-sha256:{signature}"));
+        assert!(
+            verify_grant_witness_with_key(&request, GrantWitnessMode::Require, Some(key)).is_ok()
+        );
+
+        request.run_id.push_str("-substituted");
+        assert!(
+            verify_grant_witness_with_key(&request, GrantWitnessMode::Require, Some(key))
+                .unwrap_err()
+                .contains("does not authenticate")
+        );
+    }
+
+    #[test]
+    fn grant_witness_ramp_observes_before_enforcing() {
+        let request = hosted_request("anthropic", "claude-test");
+        assert_eq!(parse_grant_witness_mode(None), GrantWitnessMode::Warn);
+        assert_eq!(
+            parse_grant_witness_mode(Some("require")),
+            GrantWitnessMode::Require
+        );
+        assert!(verify_grant_witness_with_key(&request, GrantWitnessMode::Warn, None).is_ok());
+        assert!(
+            verify_grant_witness_with_key(&request, GrantWitnessMode::Require, None)
+                .unwrap_err()
+                .contains("required")
+        );
     }
 
     #[test]
