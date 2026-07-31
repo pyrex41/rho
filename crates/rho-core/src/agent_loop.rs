@@ -303,19 +303,56 @@ async fn run_loop(
                             .await;
                     }
                     ToolGroup::Parallel(calls) => {
-                        // Emit all Start events
+                        // Apply authorization hooks to every call before starting any of them.
+                        // Parallel-safe tools must not bypass the same policy checks used by
+                        // sequential tools.
+                        let mut authorized_calls = Vec::with_capacity(calls.len());
                         for (id, name, args) in calls {
+                            let mut effective_args = args.clone();
+                            let denied = run_pre_tool_hooks(
+                                &config.pre_tool_hooks,
+                                id,
+                                name,
+                                &mut effective_args,
+                                &cancel,
+                                &stream,
+                            )
+                            .await;
+
+                            if let Some(reason) = denied {
+                                let _ = stream
+                                    .push(AgentEvent::ToolExecutionDenied {
+                                        tool_call_id: id.clone(),
+                                        tool_name: name.clone(),
+                                        reason: reason.clone(),
+                                    })
+                                    .await;
+                                let tool_result_msg = Message::ToolResult {
+                                    tool_call_id: id.clone(),
+                                    tool_name: name.clone(),
+                                    content: vec![Content::Text {
+                                        text: format!("Tool execution denied: {}", reason),
+                                    }],
+                                    is_error: true,
+                                    timestamp: now_ms(),
+                                };
+                                tool_results.push(tool_result_msg.clone());
+                                messages.push(tool_result_msg);
+                                continue;
+                            }
+
                             let _ = stream
                                 .push(AgentEvent::ToolExecutionStart {
                                     tool_call_id: id.clone(),
                                     tool_name: name.clone(),
-                                    args: args.clone(),
+                                    args: effective_args.clone(),
                                 })
                                 .await;
+                            authorized_calls.push((id.clone(), name.clone(), effective_args));
                         }
 
                         // Execute all concurrently
-                        let futures: Vec<_> = calls
+                        let futures: Vec<_> = authorized_calls
                             .iter()
                             .map(|(id, name, args)| {
                                 let tools = config.tools.clone();

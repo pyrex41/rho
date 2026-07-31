@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rho_core::agent_loop::{agent_loop, AgentLoopConfig};
-use rho_core::config::load_project_config;
+use rho_core::config::ProjectConfig;
 use rho_core::models::{ModelConfig, ModelRegistry, ProviderType};
 use rho_core::types as core;
 use rho_protocol as protocol;
@@ -14,7 +14,10 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use crate::{build_system_prompt, build_tools};
+use crate::build_tools;
+
+const PROTOCOL_SYSTEM_PROMPT: &str =
+    "You are a coding assistant. Use only the tools supplied with this execution.";
 
 pub async fn run(request_file: &Path, events: &str) -> i32 {
     debug_assert_eq!(events, "jsonl");
@@ -43,7 +46,10 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
         let _ = emitter.failure("grant_denied", error, false);
         return 0;
     }
-    let project_config = load_project_config(&cwd);
+    // Protocol execution must not silently ingest RHO.md, CLAUDE.md, global
+    // memories, skills, or commands. Those ambient files are outside the
+    // request/grant contract and could be exfiltrated to the provider.
+    let project_config = ProjectConfig::default();
     let model_config = model_config(&request);
     let api_key = match resolve_credential(&request, &model_config) {
         Ok(key) => key,
@@ -86,7 +92,7 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
     let system_prompt = request
         .system_prompt
         .clone()
-        .unwrap_or_else(|| build_system_prompt(&cwd, &project_config, None));
+        .unwrap_or_else(|| PROTOCOL_SYSTEM_PROMPT.to_owned());
     let model = match rho_core::protocol::model_from_protocol(&request.model, &model_config) {
         Ok(model) => model,
         Err(error) => {
@@ -131,7 +137,13 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
     }
 
     let cancel = CancellationToken::new();
-    install_cancellation(cancel.clone(), request.limits.deadline.as_deref());
+    install_cancellation(
+        cancel.clone(),
+        effective_deadline(
+            request.limits.deadline.as_deref(),
+            &request.grant.expires_at,
+        ),
+    );
     let mut stream = agent_loop(messages, config, cancel.clone());
     let mut turns = 0_u32;
     let mut final_messages = None;
@@ -162,7 +174,11 @@ pub async fn run(request_file: &Path, events: &str) -> i32 {
             } => {
                 let _ = emitter.event(
                     "tool.requested",
-                    &json!({"call_id": tool_call_id, "tool": tool_name, "arguments": args}),
+                    &json!({
+                        "call_id": tool_call_id,
+                        "tool": tool_name,
+                        "arguments": redact_tool_arguments(&tool_name, &args),
+                    }),
                 );
                 let _ = emitter.event(
                     "tool.authorized",
@@ -311,8 +327,23 @@ fn preflight(request: &protocol::RunRequest) -> Result<(), String> {
         return Err("execution grant has expired".into());
     }
     if let Some(deadline) = request.limits.deadline.as_deref() {
-        DateTime::parse_from_rfc3339(deadline)
+        let deadline = DateTime::parse_from_rfc3339(deadline)
             .map_err(|_| "limits.deadline must be RFC 3339".to_string())?;
+        if deadline.with_timezone(&Utc) <= Utc::now() {
+            return Err("execution deadline has expired".into());
+        }
+    }
+    if request.limits.max_turns == Some(0) {
+        return Err("limits.max_turns must be greater than zero".into());
+    }
+    if request.limits.max_output_tokens == Some(0) {
+        return Err("limits.max_output_tokens must be greater than zero".into());
+    }
+    if request.limits.max_input_tokens.is_some() {
+        return Err("limits.max_input_tokens is not supported by this runner".into());
+    }
+    if request.limits.max_cost_micros.is_some() {
+        return Err("limits.max_cost_micros is not supported by this runner".into());
     }
     Ok(())
 }
@@ -409,14 +440,71 @@ fn resolve_credential(
         let name = reference
             .strip_prefix("env:")
             .ok_or_else(|| "only env: credential references are supported".to_string())?;
+        let expected = model.api_key_env.as_deref().ok_or_else(|| {
+            "the selected provider has no credential environment variable".to_string()
+        })?;
+        if name != expected {
+            return Err(format!(
+                "credential reference {name:?} is not valid for provider {:?}",
+                request.model.provider
+            ));
+        }
         return std::env::var(name)
-            .map_err(|_| format!("credential environment variable {name} is unavailable"));
+            .map_err(|_| format!("credential environment variable {name} is unavailable"))
+            .and_then(|value| {
+                if value.is_empty() {
+                    Err(format!("credential environment variable {name} is empty"))
+                } else {
+                    Ok(value)
+                }
+            });
     }
     ModelRegistry::resolve_api_key(model).map_err(|e| e.to_string())
 }
 
 fn content_value(content: &[core::Content]) -> Value {
     serde_json::to_value(content).unwrap_or(Value::Null)
+}
+
+fn redact_tool_arguments(tool_name: &str, arguments: &Value) -> Value {
+    // Mutation payloads routinely contain source, credentials, or generated
+    // secrets. The protocol event is an audit record, not a second copy of
+    // potentially sensitive file contents.
+    if matches!(tool_name, "write" | "edit") {
+        let path = arguments
+            .get("path")
+            .or_else(|| arguments.get("file_path"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        return json!({"path": path, "content_redacted": true});
+    }
+    redact_value(arguments)
+}
+
+fn redact_value(value: &Value) -> Value {
+    match value {
+        Value::Object(values) => Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| {
+                    let normalized = key.to_ascii_lowercase();
+                    let sensitive = ["key", "token", "secret", "password", "authorization"]
+                        .iter()
+                        .any(|needle| normalized.contains(needle));
+                    (
+                        key.clone(),
+                        if sensitive {
+                            Value::String("[REDACTED]".into())
+                        } else {
+                            redact_value(value)
+                        },
+                    )
+                })
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(redact_value).collect()),
+        _ => value.clone(),
+    }
 }
 
 fn usage_from_messages(messages: &[core::Message]) -> protocol::Usage {
@@ -435,7 +523,7 @@ fn usage_from_messages(messages: &[core::Message]) -> protocol::Usage {
         })
 }
 
-fn install_cancellation(cancel: CancellationToken, deadline: Option<&str>) {
+fn install_cancellation(cancel: CancellationToken, deadline: Option<DateTime<Utc>>) {
     let signal_cancel = cancel.clone();
     tokio::spawn(async move {
         let _ = tokio::signal::ctrl_c().await;
@@ -453,14 +541,25 @@ fn install_cancellation(cancel: CancellationToken, deadline: Option<&str>) {
             }
         });
     }
-    if let Some(deadline) = deadline.and_then(|value| DateTime::parse_from_rfc3339(value).ok()) {
-        let delay = (deadline.with_timezone(&Utc) - Utc::now())
-            .to_std()
-            .unwrap_or_default();
+    if let Some(deadline) = deadline {
+        let delay = (deadline - Utc::now()).to_std().unwrap_or_default();
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
             cancel.cancel();
         });
+    }
+}
+
+fn effective_deadline(requested: Option<&str>, grant_expiry: &str) -> Option<DateTime<Utc>> {
+    let requested = requested
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
+    let grant = DateTime::parse_from_rfc3339(grant_expiry)
+        .ok()
+        .map(|value| value.with_timezone(&Utc));
+    match (requested, grant) {
+        (Some(requested), Some(grant)) => Some(requested.min(grant)),
+        (requested, grant) => requested.or(grant),
     }
 }
 
@@ -517,12 +616,27 @@ impl rho_core::hooks::PreToolUseHook for PathGrantHook {
         args: &Value,
         _cancel: CancellationToken,
     ) -> rho_core::hooks::PreToolUseResult {
-        let roots = if matches!(tool_name, "write" | "edit") {
-            &self.write_roots
-        } else {
-            &self.read_roots
+        let (roots, path) = match tool_name {
+            "write" => (&self.write_roots, args.get("path").and_then(Value::as_str)),
+            "edit" => (
+                &self.write_roots,
+                args.get("file_path")
+                    .or_else(|| args.get("path"))
+                    .and_then(Value::as_str),
+            ),
+            "read" | "grep" => (&self.read_roots, args.get("path").and_then(Value::as_str)),
+            "find" => (&self.read_roots, Some(".")),
+            _ => {
+                return rho_core::hooks::PreToolUseResult::Deny {
+                    reason: format!("tool {tool_name:?} has no protocol path policy"),
+                }
+            }
         };
-        let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
+        let Some(path) = path else {
+            return rho_core::hooks::PreToolUseResult::Deny {
+                reason: format!("tool {tool_name:?} did not supply a path for authorization"),
+            };
+        };
         if self.allowed(path, roots) {
             rho_core::hooks::PreToolUseResult::Allow
         } else {
@@ -595,6 +709,7 @@ impl Emitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rho_core::hooks::PreToolUseHook;
 
     #[test]
     fn wildcard_grants_match_prefix_and_suffix() {
@@ -668,5 +783,91 @@ mod tests {
         assert!(hook.allowed(read.join("a").to_str().unwrap(), &hook.read_roots));
         assert!(!hook.allowed(read.join("a").to_str().unwrap(), &hook.write_roots));
         assert!(hook.allowed(write.join("a").to_str().unwrap(), &hook.write_roots));
+    }
+
+    #[tokio::test]
+    async fn edit_authorizes_file_path_not_the_workspace_default() {
+        let temp = tempfile::tempdir().unwrap();
+        let write = temp.path().join("write");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&write).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let hook = PathGrantHook {
+            cwd: write.clone(),
+            read_roots: vec![],
+            write_roots: vec![std::fs::canonicalize(&write).unwrap()],
+        };
+        let result = hook
+            .execute(
+                "edit",
+                &json!({"file_path": outside.join("secret")}),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            rho_core::hooks::PreToolUseResult::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn unsupported_limits_fail_closed() {
+        let request_with = |field: &str| {
+            let mut request = protocol::RunRequest::new(
+                "run",
+                protocol::ModelRef {
+                    provider: "anthropic".into(),
+                    id: "claude-test".into(),
+                },
+                vec![],
+                protocol::ExecutionGrant {
+                    grant_id: "g".into(),
+                    expires_at: "2999-01-01T00:00:00Z".into(),
+                    providers: vec!["anthropic".into()],
+                    models: vec!["claude-*".into()],
+                    tools: Default::default(),
+                    read_roots: vec![],
+                    write_roots: vec![],
+                    network: Default::default(),
+                    witness: None,
+                    command_policy_ref: None,
+                    command_rules: vec![],
+                },
+            );
+            match field {
+                "input" => request.limits.max_input_tokens = Some(1),
+                "cost" => request.limits.max_cost_micros = Some(1),
+                _ => unreachable!(),
+            }
+            request
+        };
+        assert!(preflight(&request_with("input"))
+            .unwrap_err()
+            .contains("not supported"));
+        assert!(preflight(&request_with("cost"))
+            .unwrap_err()
+            .contains("not supported"));
+    }
+
+    #[test]
+    fn grant_expiry_caps_requested_deadline() {
+        let effective =
+            effective_deadline(Some("2999-01-02T00:00:00Z"), "2999-01-01T00:00:00Z").unwrap();
+        assert_eq!(effective.to_rfc3339(), "2999-01-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn tool_event_arguments_redact_secrets_and_mutation_content() {
+        assert_eq!(
+            redact_tool_arguments(
+                "read",
+                &json!({"path": "a", "nested": {"api_token": "secret"}}),
+            ),
+            json!({"path": "a", "nested": {"api_token": "[REDACTED]"}})
+        );
+        assert_eq!(
+            redact_tool_arguments("write", &json!({"path": "a", "content": "private source"}),),
+            json!({"path": "a", "content_redacted": true})
+        );
     }
 }
