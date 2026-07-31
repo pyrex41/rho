@@ -187,12 +187,9 @@ pub fn apply_hashline_edits(
                 }
             }
             ParsedRefs::InsertAfter { after } => {
-                if let ValidateResult::OutOfBounds { line, total } = validate_or_relocate(
-                    after,
-                    &file_lines,
-                    &unique_line_by_hash,
-                    &mut mismatches,
-                ) {
+                if let ValidateResult::OutOfBounds { line, total } =
+                    validate_or_relocate(after, &file_lines, &unique_line_by_hash, &mut mismatches)
+                {
                     return Err(HashlineError::LineOutOfBounds { line, total });
                 }
             }
@@ -208,21 +205,13 @@ pub fn apply_hashline_edits(
                 let original_end = end.line;
                 let original_count = original_end - original_start + 1;
 
-                let start_result = validate_or_relocate(
-                    start,
-                    &file_lines,
-                    &unique_line_by_hash,
-                    &mut mismatches,
-                );
+                let start_result =
+                    validate_or_relocate(start, &file_lines, &unique_line_by_hash, &mut mismatches);
                 if let ValidateResult::OutOfBounds { line, total } = start_result {
                     return Err(HashlineError::LineOutOfBounds { line, total });
                 }
-                let end_result = validate_or_relocate(
-                    end,
-                    &file_lines,
-                    &unique_line_by_hash,
-                    &mut mismatches,
-                );
+                let end_result =
+                    validate_or_relocate(end, &file_lines, &unique_line_by_hash, &mut mismatches);
                 if let ValidateResult::OutOfBounds { line, total } = end_result {
                     return Err(HashlineError::LineOutOfBounds { line, total });
                 }
@@ -328,21 +317,28 @@ pub fn apply_hashline_edits(
                         &explicitly_touched,
                     )
                 {
-                    let orig_lines: Vec<&str> = original_file_lines
-                        [start_line - 1..start_line - 1 + delete_count]
-                        .to_vec();
+                    let orig_lines: Vec<&str> =
+                        original_file_lines[start_line - 1..start_line - 1 + delete_count].to_vec();
                     let mut next_lines = heuristics::restore_indent_for_paired_replacement(
                         &[orig_lines[0]],
                         &new_lines,
                     );
                     if orig_lines.join("\n")
-                        == next_lines.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+                        == next_lines
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n")
                         && heuristics::any_confusable_hyphens(&orig_lines)
                     {
                         next_lines = heuristics::normalize_confusable_hyphens_in_lines(&next_lines);
                     }
                     if orig_lines.join("\n")
-                        != next_lines.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+                        != next_lines
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     {
                         let end = start_line - 1 + delete_count;
                         file_lines.splice(start_line - 1..end, next_lines);
@@ -361,14 +357,22 @@ pub fn apply_hashline_edits(
                 let mut new_lines =
                     heuristics::restore_indent_for_paired_replacement(&orig_lines, &stripped);
                 if orig_lines.join("\n")
-                    == new_lines.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+                    == new_lines
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
                     && heuristics::any_confusable_hyphens(&orig_lines)
                 {
                     new_lines = heuristics::normalize_confusable_hyphens_in_lines(&new_lines);
                 }
                 // Skip noop
                 if orig_lines.join("\n")
-                    != new_lines.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+                    != new_lines
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 {
                     let start = line_ref.line - 1;
                     file_lines.splice(start..start + 1, new_lines);
@@ -388,13 +392,21 @@ pub fn apply_hashline_edits(
                 let mut new_lines =
                     heuristics::restore_indent_for_paired_replacement(&orig_lines, &stripped);
                 if orig_lines.join("\n")
-                    == new_lines.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+                    == new_lines
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
                     && heuristics::any_confusable_hyphens(&orig_lines)
                 {
                     new_lines = heuristics::normalize_confusable_hyphens_in_lines(&new_lines);
                 }
                 if orig_lines.join("\n")
-                    != new_lines.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+                    != new_lines
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 {
                     let s = start.line - 1;
                     file_lines.splice(s..s + count, new_lines);
@@ -402,8 +414,7 @@ pub fn apply_hashline_edits(
             }
             ParsedRefs::InsertAfter { after } => {
                 let anchor_line = original_file_lines[after.line - 1];
-                let inserted =
-                    heuristics::strip_insert_anchor_echo(anchor_line, &edit.dst_lines);
+                let inserted = heuristics::strip_insert_anchor_echo(anchor_line, &edit.dst_lines);
                 if !inserted.is_empty() {
                     let pos = after.line;
                     file_lines.splice(pos..pos, inserted);
@@ -464,7 +475,7 @@ fn apply_replace_edit(
     // Apply replacements back-to-front
     let mut result = content.to_string();
     let mut sorted = ws_matches;
-    sorted.sort_by(|a, b| b.0.cmp(&a.0));
+    sorted.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     for (start, end) in sorted {
         result = format!("{}{}{}", &result[..start], new_text, &result[end..]);
         if !replace.all {
@@ -772,7 +783,7 @@ mod tests {
         // but the edit references line 2 with beta's hash
         let content = make_content(&["alpha", "new1", "new2", "beta", "gamma"]);
         let beta_hash = hash_at(&content, 4); // "beta" is at line 4
-        // But we reference line 2 with beta's hash — should relocate to line 4
+                                              // But we reference line 2 with beta's hash — should relocate to line 4
         let edits = vec![HashlineEdit::SetLine {
             set_line: SetLineOp {
                 anchor: format!("2:{}", beta_hash),

@@ -77,10 +77,7 @@ pub fn parse_anchor(anchor: &str) -> Result<LineRef, HashlineError> {
 /// Returns the `LineRef` and the content portion after the pipe.
 pub fn parse_line_ref(formatted: &str) -> Result<(LineRef, &str), HashlineError> {
     let pipe_pos = formatted.find('|').ok_or_else(|| {
-        HashlineError::InvalidAnchor(format!(
-            "No pipe separator found in \"{}\"",
-            formatted
-        ))
+        HashlineError::InvalidAnchor(format!("No pipe separator found in \"{}\"", formatted))
     })?;
 
     let prefix = &formatted[..pipe_pos];

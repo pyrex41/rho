@@ -19,10 +19,7 @@ pub async fn auto_commit_file(file_path: &Path, action: &str) {
         None => return,
     };
 
-    let dir = file_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let dir = file_path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     // Check if inside a git work tree
     let output = match tokio::process::Command::new("git")

@@ -18,6 +18,12 @@ pub struct WebFetchTool {
     claude_proxy: Option<Arc<AtomicBool>>,
 }
 
+impl Default for WebFetchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebFetchTool {
     pub fn new() -> Self {
         Self { claude_proxy: None }
@@ -32,7 +38,7 @@ impl WebFetchTool {
     fn use_claude(&self) -> bool {
         self.claude_proxy
             .as_ref()
-            .map_or(false, |f| f.load(Ordering::Relaxed))
+            .is_some_and(|f| f.load(Ordering::Relaxed))
     }
 }
 
@@ -84,7 +90,9 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     };
 
     let tail_start = {
-        let mut start = text.len().saturating_sub(TRUNCATION_EDGE.min(max_chars / 2));
+        let mut start = text
+            .len()
+            .saturating_sub(TRUNCATION_EDGE.min(max_chars / 2));
         while start < text.len() && !text.is_char_boundary(start) {
             start += 1;
         }
@@ -189,12 +197,9 @@ impl AgentTool for WebFetchTool {
         params: Value,
         _cancel: CancellationToken,
     ) -> Result<ToolResult, ToolError> {
-        let url = params
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidParameters("missing or invalid 'url' parameter".into())
-            })?;
+        let url = params.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
+            ToolError::InvalidParameters("missing or invalid 'url' parameter".into())
+        })?;
 
         let max_chars = params
             .get("max_chars")
@@ -202,10 +207,7 @@ impl AgentTool for WebFetchTool {
             .map(|v| v as usize)
             .unwrap_or(DEFAULT_MAX_CHARS);
 
-        let raw = params
-            .get("raw")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let raw = params.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
 
         // Claude proxy mode: shell out to `claude -p`
         if self.use_claude() {

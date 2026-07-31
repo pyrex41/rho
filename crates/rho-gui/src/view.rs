@@ -38,11 +38,12 @@ pub fn view(app: &RhoApp) -> Element<'_, Message> {
     // Drag handle for sidebar resize — wider hit area with visible center line
     let drag_handle = mouse_area(
         container(
-            container(iced::widget::Space::new().width(2).height(Length::Fill))
-                .style(|_theme: &Theme| container::Style {
+            container(iced::widget::Space::new().width(2).height(Length::Fill)).style(
+                |_theme: &Theme| container::Style {
                     background: Some(color!(0x565f89).into()),
                     ..Default::default()
-                }),
+                },
+            ),
         )
         .width(8)
         .height(Length::Fill)
@@ -65,11 +66,7 @@ pub fn theme(_app: &RhoApp) -> Theme {
 // --- Sidebar (220px) ---
 
 fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
-    let dir_name = app
-        .cwd
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(".");
+    let dir_name = app.cwd.file_name().and_then(|n| n.to_str()).unwrap_or(".");
 
     let elapsed = app.session_start.elapsed();
     let mins = elapsed.as_secs() / 60;
@@ -79,7 +76,11 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
     let mut col = Column::new().spacing(16).padding(16).width(sidebar_w);
 
     // Project + config button
-    let cfg_label = if app.settings_open { "✕ Close" } else { "⚙ Config" };
+    let cfg_label = if app.settings_open {
+        "✕ Close"
+    } else {
+        "⚙ Config"
+    };
     let cfg_btn = button(text(cfg_label).size(12).color(color!(0x7aa2f7)))
         .on_press(if app.settings_open {
             Message::CloseSettings
@@ -118,19 +119,20 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
     for (provider, models) in &by_provider {
         let collapsed = app.collapsed_providers.contains(provider);
         let arrow = if collapsed { "▸" } else { "▾" };
-        let avail_count = models.iter().filter(|m| app.available_model_ids.contains(&m.id)).count();
+        let avail_count = models
+            .iter()
+            .filter(|m| app.available_model_ids.contains(&m.id))
+            .count();
         let header_label = format!("{arrow} {provider}  ({avail_count}/{})", models.len());
         let provider_clone = provider.clone();
-        let header_btn = button(
-            text(header_label).size(11).color(color!(0x7aa2f7)),
-        )
-        .on_press(Message::ToggleProvider(provider_clone))
-        .width(Length::Fill)
-        .padding([2, 0])
-        .style(|_theme, _status| button::Style {
-            background: None,
-            ..Default::default()
-        });
+        let header_btn = button(text(header_label).size(11).color(color!(0x7aa2f7)))
+            .on_press(Message::ToggleProvider(provider_clone))
+            .width(Length::Fill)
+            .padding([2, 0])
+            .style(|_theme, _status| button::Style {
+                background: None,
+                ..Default::default()
+            });
         col = col.push(header_btn);
 
         if !collapsed {
@@ -172,34 +174,33 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
     } else {
         color!(0x7aa2f7)
     };
-    let turns = app.conversation_history.iter()
+    let turns = app
+        .conversation_history
+        .iter()
         .filter(|m| matches!(m, rho_core::types::Message::User { .. }))
         .count();
     let ctx_label = format!(
         "CONTEXT  {:.0}%  ({} turns, {}m {}s)",
         context_pct, turns, mins, secs
     );
-    col = col
-        .push(text(ctx_label).size(11).color(ctx_color))
-        .push(
-            progress_bar(0.0..=100.0, context_pct as f32)
-                .style(move |_theme: &Theme| iced::widget::progress_bar::Style {
-                    background: color!(0x1a1b2e).into(),
-                    bar: ctx_color.into(),
-                    border: iced::Border::default(),
-                }),
-        );
+    col = col.push(text(ctx_label).size(11).color(ctx_color)).push(
+        progress_bar(0.0..=100.0, context_pct as f32).style(move |_theme: &Theme| {
+            iced::widget::progress_bar::Style {
+                background: color!(0x1a1b2e).into(),
+                bar: ctx_color.into(),
+                border: iced::Border::default(),
+            }
+        }),
+    );
 
     // Tokens
     col = col
         .push(text("TOKENS").size(11).color(color!(0x565f89)))
-        .push(
-            row![
-                text(format!("↑ {}", format_tokens(app.total_input_tokens))).size(12),
-                text("  ").size(12),
-                text(format!("↓ {}", format_tokens(app.total_output_tokens))).size(12),
-            ]
-        );
+        .push(row![
+            text(format!("↑ {}", format_tokens(app.total_input_tokens))).size(12),
+            text("  ").size(12),
+            text(format!("↓ {}", format_tokens(app.total_output_tokens))).size(12),
+        ]);
 
     // New chat button
     let new_btn = button(
@@ -270,24 +271,19 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
             },
         });
 
-        let del_btn = button(
-            text("x")
-                .size(10)
-                .font(FONT_MONO)
-                .color(color!(0x565f89)),
-        )
-        .on_press(Message::DeleteSession(delete_id))
-        .padding([2, 4])
-        .style(move |_theme: &Theme, status| match status {
-            button::Status::Hovered => button::Style {
-                background: Some(color!(0xf7768e).into()),
-                ..button::Style::default()
-            },
-            _ => button::Style {
-                background: None,
-                ..button::Style::default()
-            },
-        });
+        let del_btn = button(text("x").size(10).font(FONT_MONO).color(color!(0x565f89)))
+            .on_press(Message::DeleteSession(delete_id))
+            .padding([2, 4])
+            .style(move |_theme: &Theme, status| match status {
+                button::Status::Hovered => button::Style {
+                    background: Some(color!(0xf7768e).into()),
+                    ..button::Style::default()
+                },
+                _ => button::Style {
+                    background: None,
+                    ..button::Style::default()
+                },
+            });
 
         col = col.push(row![title_btn, del_btn].spacing(2));
     }
@@ -331,25 +327,20 @@ fn render_sidebar<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         };
         let indicator = if *enabled { "on " } else { "off" };
         let label_text = format!("{indicator}  {name}");
-        let btn = button(
-            text(label_text)
-                .size(12)
-                .font(FONT_MONO)
-                .color(label_color),
-        )
-        .on_press(Message::ToggleTool(name))
-        .width(Length::Fill)
-        .padding([2, 4])
-        .style(move |_theme: &Theme, status| match status {
-            button::Status::Hovered => button::Style {
-                background: Some(color!(0x283457).into()),
-                ..button::Style::default()
-            },
-            _ => button::Style {
-                background: None,
-                ..button::Style::default()
-            },
-        });
+        let btn = button(text(label_text).size(12).font(FONT_MONO).color(label_color))
+            .on_press(Message::ToggleTool(name))
+            .width(Length::Fill)
+            .padding([2, 4])
+            .style(move |_theme: &Theme, status| match status {
+                button::Status::Hovered => button::Style {
+                    background: Some(color!(0x283457).into()),
+                    ..button::Style::default()
+                },
+                _ => button::Style {
+                    background: None,
+                    ..button::Style::default()
+                },
+            });
         col = col.push(btn);
     }
 
@@ -414,7 +405,12 @@ fn model_group_label(m: &rho_core::models::ModelConfig) -> String {
         };
     }
     // Group by domain from base_url
-    if let Some(host) = m.base_url.split("//").nth(1).and_then(|s| s.split('/').next()) {
+    if let Some(host) = m
+        .base_url
+        .split("//")
+        .nth(1)
+        .and_then(|s| s.split('/').next())
+    {
         match host {
             "api.anthropic.com" => "Anthropic".into(),
             "api.openai.com" => "OpenAI".into(),
@@ -463,9 +459,7 @@ fn render_chat<'a>(app: &'a RhoApp) -> Element<'a, Message> {
         blocks_col = blocks_col.push(render_streaming_markdown(app));
     }
 
-    let chat_area = scrollable(blocks_col)
-        .height(Length::Fill)
-        .anchor_bottom();
+    let chat_area = scrollable(blocks_col).height(Length::Fill).anchor_bottom();
 
     // Autocomplete popup
     let autocomplete_popup: Element<'_, Message> = if app.autocomplete.active {
@@ -572,10 +566,7 @@ fn render_chat<'a>(app: &'a RhoApp) -> Element<'a, Message> {
             .align_y(iced::Alignment::Center)
             .into()
     } else {
-        row![input_field, send_button]
-            .spacing(8)
-            .padding(16)
-            .into()
+        row![input_field, send_button].spacing(8).padding(16).into()
     };
 
     container(column![chat_area, autocomplete_popup, input_area])
@@ -604,21 +595,25 @@ fn render_setup_guide<'a>() -> Element<'a, Message> {
         .font(FONT_INTER)
         .color(color!(0x565f89));
 
-    let xai_connect_btn = button(text("Connect Grok subscription").size(13).color(color!(0x9ece6a)))
-        .on_press(Message::ConnectProvider(AuthProvider::Xai))
-        .padding([6, 14])
-        .style(|_theme: &Theme, status| button::Style {
-            background: Some(match status {
-                button::Status::Hovered => color!(0x1a2e1a).into(),
-                _ => color!(0x0d1a0d).into(),
-            }),
-            border: iced::Border {
-                color: color!(0x9ece6a),
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..button::Style::default()
-        });
+    let xai_connect_btn = button(
+        text("Connect Grok subscription")
+            .size(13)
+            .color(color!(0x9ece6a)),
+    )
+    .on_press(Message::ConnectProvider(AuthProvider::Xai))
+    .padding([6, 14])
+    .style(|_theme: &Theme, status| button::Style {
+        background: Some(match status {
+            button::Status::Hovered => color!(0x1a2e1a).into(),
+            _ => color!(0x0d1a0d).into(),
+        }),
+        border: iced::Border {
+            color: color!(0x9ece6a),
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..button::Style::default()
+    });
 
     let xai_section = container(
         column![
@@ -682,10 +677,7 @@ fn setup_section<'a>(title: &'a str, body: &'a str) -> Element<'a, Message> {
                 .size(14)
                 .font(FONT_MONO_BOLD)
                 .color(color!(0x9ece6a)),
-            text(body)
-                .size(13)
-                .font(FONT_MONO)
-                .color(color!(0xa9b1d6)),
+            text(body).size(13).font(FONT_MONO).color(color!(0xa9b1d6)),
         ]
         .spacing(6),
     )
@@ -807,7 +799,10 @@ fn render_shell_output<'a>(
     };
 
     let col = column![
-        text(format!("$ {command}")).size(13).font(FONT_MONO).color(header_color),
+        text(format!("$ {command}"))
+            .size(13)
+            .font(FONT_MONO)
+            .color(header_color),
         text(output)
             .size(12)
             .font(FONT_MONO)
@@ -892,12 +887,7 @@ fn render_tool_call<'a>(
             } else {
                 result.clone()
             };
-            col = col.push(
-                text(display)
-                    .size(11)
-                    .font(FONT_MONO)
-                    .color(result_color),
-            );
+            col = col.push(text(display).size(11).font(FONT_MONO).color(result_color));
         }
     }
 
@@ -934,7 +924,11 @@ fn render_settings(app: &RhoApp) -> Element<'_, Message> {
     use crate::app::SettingsTab;
 
     let tab_btn = |label: String, tab: SettingsTab, active: bool| {
-        let color = if active { color!(0x7aa2f7) } else { color!(0x565f89) };
+        let color = if active {
+            color!(0x7aa2f7)
+        } else {
+            color!(0x565f89)
+        };
         button(text(label).size(13).color(color))
             .on_press(Message::SettingsTabChanged(tab))
             .padding([4, 12])
@@ -980,54 +974,55 @@ fn render_settings(app: &RhoApp) -> Element<'_, Message> {
         return render_providers_tab(app, tabs);
     }
 
-    let (editor_elem, file_label, save_msg): (Element<'_, Message>, String, Message) = match app.settings_tab {
-        SettingsTab::Project => {
-            let path_label = app
-                .project_config
-                .source
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| format!("{}/RHO.md (will be created)", app.cwd.display()));
-            let ed = text_editor(&app.project_config_content)
-                .on_action(Message::ProjectConfigAction)
-                .font(FONT_MONO)
-                .height(Length::Fill)
-                .style(|_theme: &Theme, _status| text_editor::Style {
-                    background: color!(0x0d0e17).into(),
-                    border: iced::Border {
-                        color: color!(0x3b4261),
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    placeholder: color!(0x565f89),
-                    value: color!(0xa9b1d6),
-                    selection: color!(0x283457),
-                });
-            (ed.into(), path_label, Message::SaveProjectConfig)
-        }
-        SettingsTab::Models => {
-            let path_label = dirs::home_dir()
-                .map(|h| h.join(".rho").join("models.toml").display().to_string())
-                .unwrap_or_else(|| "~/.rho/models.toml".to_string());
-            let ed = text_editor(&app.models_config_content)
-                .on_action(Message::ModelsConfigAction)
-                .font(FONT_MONO)
-                .height(Length::Fill)
-                .style(|_theme: &Theme, _status| text_editor::Style {
-                    background: color!(0x0d0e17).into(),
-                    border: iced::Border {
-                        color: color!(0x3b4261),
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    placeholder: color!(0x565f89),
-                    value: color!(0xa9b1d6),
-                    selection: color!(0x283457),
-                });
-            (ed.into(), path_label, Message::SaveModelsConfig)
-        }
-        SettingsTab::Providers => unreachable!("handled above"),
-    };
+    let (editor_elem, file_label, save_msg): (Element<'_, Message>, String, Message) =
+        match app.settings_tab {
+            SettingsTab::Project => {
+                let path_label = app
+                    .project_config
+                    .source
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| format!("{}/RHO.md (will be created)", app.cwd.display()));
+                let ed = text_editor(&app.project_config_content)
+                    .on_action(Message::ProjectConfigAction)
+                    .font(FONT_MONO)
+                    .height(Length::Fill)
+                    .style(|_theme: &Theme, _status| text_editor::Style {
+                        background: color!(0x0d0e17).into(),
+                        border: iced::Border {
+                            color: color!(0x3b4261),
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        placeholder: color!(0x565f89),
+                        value: color!(0xa9b1d6),
+                        selection: color!(0x283457),
+                    });
+                (ed.into(), path_label, Message::SaveProjectConfig)
+            }
+            SettingsTab::Models => {
+                let path_label = dirs::home_dir()
+                    .map(|h| h.join(".rho").join("models.toml").display().to_string())
+                    .unwrap_or_else(|| "~/.rho/models.toml".to_string());
+                let ed = text_editor(&app.models_config_content)
+                    .on_action(Message::ModelsConfigAction)
+                    .font(FONT_MONO)
+                    .height(Length::Fill)
+                    .style(|_theme: &Theme, _status| text_editor::Style {
+                        background: color!(0x0d0e17).into(),
+                        border: iced::Border {
+                            color: color!(0x3b4261),
+                            width: 1.0,
+                            radius: 4.0.into(),
+                        },
+                        placeholder: color!(0x565f89),
+                        value: color!(0xa9b1d6),
+                        selection: color!(0x283457),
+                    });
+                (ed.into(), path_label, Message::SaveModelsConfig)
+            }
+            SettingsTab::Providers => unreachable!("handled above"),
+        };
 
     let save_btn = button(text("Save").size(13).color(color!(0x9ece6a)))
         .on_press(save_msg)
@@ -1074,7 +1069,11 @@ fn render_providers_tab<'a>(
     let mut rows = Column::new().spacing(12);
 
     let providers = [
-        ("Anthropic (Claude)", AuthProvider::Anthropic, Provider::Anthropic),
+        (
+            "Anthropic (Claude)",
+            AuthProvider::Anthropic,
+            Provider::Anthropic,
+        ),
         ("xAI (Grok subscription)", AuthProvider::Xai, Provider::Xai),
     ];
 
@@ -1084,7 +1083,10 @@ fn render_providers_tab<'a>(
     }
 
     let header = column![
-        text("Providers").size(18).font(FONT_INTER).color(color!(0x7aa2f7)),
+        text("Providers")
+            .size(18)
+            .font(FONT_INTER)
+            .color(color!(0x7aa2f7)),
         text("Connect a paid subscription or use an API key for each provider.")
             .size(12)
             .font(FONT_INTER)
@@ -1097,7 +1099,10 @@ fn render_providers_tab<'a>(
         .padding(20)
         .width(Length::Fill);
 
-    container(body).width(Length::Fill).height(Length::Fill).into()
+    container(body)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 fn provider_row<'a>(
@@ -1110,11 +1115,7 @@ fn provider_row<'a>(
     use rho_core::auth::ConnectionStatus;
 
     let (status_text, status_color, connected) = match &status {
-        ConnectionStatus::Disconnected => (
-            "Not connected".to_string(),
-            color!(0x565f89),
-            false,
-        ),
+        ConnectionStatus::Disconnected => ("Not connected".to_string(), color!(0x565f89), false),
         ConnectionStatus::Connected { source, label } => {
             let label_part = label
                 .as_deref()

@@ -64,12 +64,21 @@ fn get_anthropic_token() -> Result<String, AuthError> {
 fn get_keychain_token() -> Result<String, AuthError> {
     let user = std::env::var("USER").unwrap_or_default();
     let output = std::process::Command::new("security")
-        .args(["find-generic-password", "-s", "Claude Code-credentials", "-a", &user, "-w"])
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-a",
+            &user,
+            "-w",
+        ])
         .output()
         .map_err(|e| AuthError::KeychainError(e.to_string()))?;
 
     if !output.status.success() {
-        return Err(AuthError::KeychainError("no credentials in keychain".into()));
+        return Err(AuthError::KeychainError(
+            "no credentials in keychain".into(),
+        ));
     }
 
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -90,7 +99,10 @@ pub fn is_oauth_token(token: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionStatus {
     Disconnected,
-    Connected { source: String, label: Option<String> },
+    Connected {
+        source: String,
+        label: Option<String>,
+    },
 }
 
 /// Inspect a provider's connection status without performing any network I/O.

@@ -30,11 +30,8 @@ pub trait SessionPersistence: Send + Sync {
         model: &str,
         cwd: &std::path::Path,
     ) -> Result<String, Box<dyn std::error::Error>>;
-    fn update_title(
-        &self,
-        session_id: &str,
-        title: &str,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+    fn update_title(&self, session_id: &str, title: &str)
+        -> Result<(), Box<dyn std::error::Error>>;
     fn save_messages(
         &self,
         session_id: &str,

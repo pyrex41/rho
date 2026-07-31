@@ -38,7 +38,15 @@ async fn do_stream(
     server_tools: Option<Vec<String>>,
     mut producer: EventStreamProducer<AssistantStreamEvent, Message>,
 ) {
-    match do_stream_inner(&model, &context, &options, server_tools.as_deref(), &producer).await {
+    match do_stream_inner(
+        &model,
+        &context,
+        &options,
+        server_tools.as_deref(),
+        &producer,
+    )
+    .await
+    {
         Ok(msg) => {
             producer.end(Some(msg));
         }
@@ -109,7 +117,11 @@ async fn do_stream_inner(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("OpenAI SSE JSON parse error: {} (data: {})", e, sse_event.data);
+                        tracing::warn!(
+                            "OpenAI SSE JSON parse error: {} (data: {})",
+                            e,
+                            sse_event.data
+                        );
                     }
                 }
             }

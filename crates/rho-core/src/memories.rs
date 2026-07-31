@@ -136,10 +136,7 @@ pub fn load_memory_content(memory: &MemoryMetadata) -> Option<String> {
 }
 
 /// Search memories by case-insensitive substring match on name, description, and tags.
-pub fn search_memories<'a>(
-    memories: &'a [MemoryMetadata],
-    query: &str,
-) -> Vec<&'a MemoryMetadata> {
+pub fn search_memories<'a>(memories: &'a [MemoryMetadata], query: &str) -> Vec<&'a MemoryMetadata> {
     let query_lower = query.to_lowercase();
     memories
         .iter()

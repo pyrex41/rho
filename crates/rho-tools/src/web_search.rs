@@ -17,6 +17,12 @@ pub struct WebSearchTool {
     claude_proxy: Option<Arc<AtomicBool>>,
 }
 
+impl Default for WebSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebSearchTool {
     pub fn new() -> Self {
         Self { claude_proxy: None }
@@ -31,7 +37,7 @@ impl WebSearchTool {
     fn use_claude(&self) -> bool {
         self.claude_proxy
             .as_ref()
-            .map_or(false, |f| f.load(Ordering::Relaxed))
+            .is_some_and(|f| f.load(Ordering::Relaxed))
     }
 }
 
@@ -43,10 +49,8 @@ fn parse_ddg_results(html: &str) -> Vec<(String, String, String)> {
     //   <a class="result__a" href="URL">TITLE</a>
     //   <a class="result__snippet" href="...">SNIPPET</a>
     let re_link =
-        regex::Regex::new(r#"<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>"#)
-            .unwrap();
-    let re_snippet =
-        regex::Regex::new(r#"<a[^>]*class="result__snippet"[^>]*>(.*?)</a>"#).unwrap();
+        regex::Regex::new(r#"<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>"#).unwrap();
+    let re_snippet = regex::Regex::new(r#"<a[^>]*class="result__snippet"[^>]*>(.*?)</a>"#).unwrap();
 
     let links: Vec<_> = re_link.captures_iter(html).collect();
     let snippets: Vec<_> = re_snippet.captures_iter(html).collect();
@@ -206,10 +210,7 @@ impl AgentTool for WebSearchTool {
         let response = client
             .post("https://html.duckduckgo.com/html/")
             .header("Referer", "https://duckduckgo.com/")
-            .header(
-                "Content-Type",
-                "application/x-www-form-urlencoded",
-            )
+            .header("Content-Type", "application/x-www-form-urlencoded")
             .body(format!("q={}&b=&kl=", urlencod(query)))
             .send()
             .await
@@ -245,7 +246,13 @@ impl AgentTool for WebSearchTool {
             if i > 0 {
                 output.push('\n');
             }
-            output.push_str(&format!("{}. {}\n   {}\n   {}\n", i + 1, title, url, snippet));
+            output.push_str(&format!(
+                "{}. {}\n   {}\n   {}\n",
+                i + 1,
+                title,
+                url,
+                snippet
+            ));
         }
 
         Ok(ToolResult {

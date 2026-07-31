@@ -78,10 +78,7 @@ impl ResponseHandler {
             Err(_) => return vec![],
         };
 
-        let index = parsed
-            .get("index")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let index = parsed.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let block_type_str = parsed
             .get("content_block")
             .and_then(|b| b.get("type"))
@@ -131,10 +128,7 @@ impl ResponseHandler {
             Err(_) => return vec![],
         };
 
-        let index = parsed
-            .get("index")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let index = parsed.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
         let delta = match parsed.get("delta") {
             Some(d) => d,
@@ -154,10 +148,7 @@ impl ResponseHandler {
                     .entry(index)
                     .or_default()
                     .push_str(&text);
-                vec![AssistantStreamEvent::TextDelta {
-                    index,
-                    delta: text,
-                }]
+                vec![AssistantStreamEvent::TextDelta { index, delta: text }]
             }
             "thinking_delta" => {
                 let thinking = delta
@@ -199,10 +190,7 @@ impl ResponseHandler {
             Err(_) => return vec![],
         };
 
-        let index = parsed
-            .get("index")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let index = parsed.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
         let block_type = self
             .block_types
@@ -233,16 +221,10 @@ impl ResponseHandler {
                     .get(&index)
                     .cloned()
                     .unwrap_or_default();
-                let (id, name) = self
-                    .tool_metadata
-                    .get(&index)
-                    .cloned()
-                    .unwrap_or_default();
+                let (id, name) = self.tool_metadata.get(&index).cloned().unwrap_or_default();
 
-                let arguments: serde_json::Value =
-                    serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Object(
-                        serde_json::Map::new(),
-                    ));
+                let arguments: serde_json::Value = serde_json::from_str(&json_str)
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
                 vec![AssistantStreamEvent::ToolCallEnd {
                     index,
@@ -316,15 +298,9 @@ impl ResponseHandler {
                         .get(&index)
                         .cloned()
                         .unwrap_or_default();
-                    let (id, name) = self
-                        .tool_metadata
-                        .get(&index)
-                        .cloned()
-                        .unwrap_or_default();
-                    let arguments: serde_json::Value =
-                        serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Object(
-                            serde_json::Map::new(),
-                        ));
+                    let (id, name) = self.tool_metadata.get(&index).cloned().unwrap_or_default();
+                    let arguments: serde_json::Value = serde_json::from_str(&json_str)
+                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
                     content_blocks.push(Content::ToolCall {
                         id,
                         name,
@@ -411,7 +387,10 @@ mod tests {
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
         ));
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], AssistantStreamEvent::TextStart { index: 0 }));
+        assert!(matches!(
+            events[0],
+            AssistantStreamEvent::TextStart { index: 0 }
+        ));
 
         // Deltas
         let events = handler.handle_event(&sse(
@@ -461,7 +440,10 @@ mod tests {
             "content_block_start",
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"read_file"}}"#,
         ));
-        assert!(matches!(events[0], AssistantStreamEvent::ToolCallStart { index: 0 }));
+        assert!(matches!(
+            events[0],
+            AssistantStreamEvent::ToolCallStart { index: 0 }
+        ));
 
         // JSON deltas
         handler.handle_event(&sse(
@@ -512,7 +494,10 @@ mod tests {
             "content_block_start",
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
         ));
-        assert!(matches!(events[0], AssistantStreamEvent::ThinkingStart { index: 0 }));
+        assert!(matches!(
+            events[0],
+            AssistantStreamEvent::ThinkingStart { index: 0 }
+        ));
 
         handler.handle_event(&sse(
             "content_block_delta",
@@ -575,10 +560,7 @@ mod tests {
             "content_block_delta",
             r#"{"index":0,"delta":{"type":"text_delta","text":"Hello!"}}"#,
         ));
-        handler.handle_event(&sse(
-            "content_block_stop",
-            r#"{"index":0}"#,
-        ));
+        handler.handle_event(&sse("content_block_stop", r#"{"index":0}"#));
         handler.handle_event(&sse(
             "message_delta",
             r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}"#,

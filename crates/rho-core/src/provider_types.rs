@@ -20,7 +20,11 @@ pub type AssistantStream = EventStream<AssistantStreamEvent, Message>;
 /// Type alias for the stream function signature used by agent_loop and providers.
 /// Uses Arc to allow cloning (needed for loop mode which creates configs per iteration).
 pub type StreamFn = Arc<
-    dyn Fn(&Model, StreamContext, StreamOptions) -> EventStreamConsumer<AssistantStreamEvent, Message>
+    dyn Fn(
+            &Model,
+            StreamContext,
+            StreamOptions,
+        ) -> EventStreamConsumer<AssistantStreamEvent, Message>
         + Send
         + Sync,
 >;

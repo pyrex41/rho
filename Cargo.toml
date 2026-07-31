@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/rho-protocol",
     "crates/rho-core",
     "crates/rho-hashline",
     "crates/rho-provider",

@@ -99,7 +99,10 @@ mod tests {
         assert_eq!(creds.account_label.as_deref(), Some("user@example.com"));
         // 2026-05-23T08:53:43Z is roughly 1779173623
         let exp = creds.expires_at.expect("expires_at parsed");
-        assert!(exp > 1_700_000_000, "expires_at must be sensible epoch: {exp}");
+        assert!(
+            exp > 1_700_000_000,
+            "expires_at must be sensible epoch: {exp}"
+        );
     }
 
     #[test]

@@ -57,7 +57,10 @@ fn make_diff(old: &str, new: &str) -> String {
         output.push_str(&format!("{}{}", sign, change));
     }
     if truncated {
-        output.push_str(&format!("\n... (diff truncated, showing first {} lines)\n", MAX_DIFF_LINES));
+        output.push_str(&format!(
+            "\n... (diff truncated, showing first {} lines)\n",
+            MAX_DIFF_LINES
+        ));
     }
     output
 }
@@ -229,7 +232,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "alpha\nBETA\ngamma");
+        assert_eq!(
+            std::fs::read_to_string(&file_path).unwrap(),
+            "alpha\nBETA\ngamma"
+        );
         match &result.content[0] {
             Content::Text { text } => {
                 assert!(text.contains("Edited"));
@@ -257,7 +263,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "alpha\nnew_line\ndelta");
+        assert_eq!(
+            std::fs::read_to_string(&file_path).unwrap(),
+            "alpha\nnew_line\ndelta"
+        );
     }
 
     #[tokio::test]
@@ -279,7 +288,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "qux bar qux baz qux");
+        assert_eq!(
+            std::fs::read_to_string(&file_path).unwrap(),
+            "qux bar qux baz qux"
+        );
     }
 
     #[tokio::test]
@@ -373,7 +385,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "goodbye world");
+        assert_eq!(
+            std::fs::read_to_string(&file_path).unwrap(),
+            "goodbye world"
+        );
     }
 
     #[tokio::test]

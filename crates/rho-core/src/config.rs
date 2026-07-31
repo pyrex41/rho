@@ -158,7 +158,8 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                 continue;
             } else if trimmed_line.is_empty() {
                 continue;
-            } else if line.starts_with("    ") || line.starts_with("\t\t") || line.starts_with("  ") {
+            } else if line.starts_with("    ") || line.starts_with("\t\t") || line.starts_with("  ")
+            {
                 // Indented line within an agent block
                 if let Some(ref mut agent) = current_agent {
                     if let Some((k, v)) = trimmed_line.split_once(':') {
@@ -198,7 +199,8 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                 continue;
             } else if trimmed_line.is_empty() {
                 continue;
-            } else if line.starts_with("    ") || line.starts_with("\t\t") || line.starts_with("  ") {
+            } else if line.starts_with("    ") || line.starts_with("\t\t") || line.starts_with("  ")
+            {
                 // Indented line within a hook block
                 if let Some(ref mut hook) = current_hook {
                     if let Some((k, v)) = trimmed_line.split_once(':') {
@@ -271,9 +273,8 @@ fn parse_rho_md(content: &str, path: PathBuf) -> ProjectConfig {
                 }
                 "allowed_tools" => {
                     // Inline comma-separated list
-                    config.allowed_tools = Some(
-                        value.split(',').map(|s| s.trim().to_string()).collect(),
-                    );
+                    config.allowed_tools =
+                        Some(value.split(',').map(|s| s.trim().to_string()).collect());
                 }
                 _ => {}
             }
@@ -404,7 +405,10 @@ This is a Rust workspace. Always run `cargo test` after changes.
             config.validation_commands[1],
             "cargo clippy --quiet -- -D warnings"
         );
-        assert!(config.system_prompt_append.unwrap().contains("Rust workspace"));
+        assert!(config
+            .system_prompt_append
+            .unwrap()
+            .contains("Rust workspace"));
     }
 
     #[test]
@@ -412,7 +416,10 @@ This is a Rust workspace. Always run `cargo test` after changes.
         let content = "# Just a markdown file\n\nNo frontmatter here.";
         let config = parse_rho_md(content, PathBuf::from("RHO.md"));
         assert!(config.model.is_none());
-        assert!(config.system_prompt_append.unwrap().contains("Just a markdown file"));
+        assert!(config
+            .system_prompt_append
+            .unwrap()
+            .contains("Just a markdown file"));
     }
 
     #[test]

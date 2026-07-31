@@ -1,18 +1,13 @@
 use std::path::{Path, PathBuf};
 
 /// How a skill should be executed when invoked.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum SkillExecution {
     /// Run inline in the current conversation context (default).
+    #[default]
     Inline,
     /// Fork into a sub-agent via the task tool.
     Fork,
-}
-
-impl Default for SkillExecution {
-    fn default() -> Self {
-        Self::Inline
-    }
 }
 
 #[derive(Debug, Clone)]

@@ -12,9 +12,9 @@ use rho_core::compaction;
 use rho_core::config::load_project_config;
 use rho_core::event_handler::{handle_event, EventHandlerConfig, SessionPersistence};
 use rho_core::models::{ModelConfig, ModelRegistry, ProviderType};
+use rho_core::session::SessionStore;
 use rho_core::tool::AgentTool;
 use rho_core::types::*;
-use rho_core::session::SessionStore;
 
 mod autoresearch;
 mod llama_ux;
@@ -51,7 +51,12 @@ struct Cli {
     prompt_arg: Option<String>,
 
     /// The prompt to send to the agent (alternative to positional)
-    #[arg(short = 'p', long = "prompt", value_name = "PROMPT", conflicts_with = "prompt_arg")]
+    #[arg(
+        short = 'p',
+        long = "prompt",
+        value_name = "PROMPT",
+        conflicts_with = "prompt_arg"
+    )]
     prompt: Option<String>,
 
     /// Model ID to use (registry ID like "claude-sonnet", or raw model ID)
@@ -294,7 +299,10 @@ async fn run_xai_browser_flow() -> Result<Option<String>> {
     if open::that(&handle.url).is_err() {
         eprintln!("Could not open browser automatically.");
     }
-    eprintln!("If the browser didn't open, visit this URL on this machine:\n{}\n", handle.url);
+    eprintln!(
+        "If the browser didn't open, visit this URL on this machine:\n{}\n",
+        handle.url
+    );
     let creds = handle
         .complete()
         .await
@@ -453,9 +461,17 @@ fn resolve_model_config(
 
     // Fallback: treat as raw model ID, infer provider from name
     let (provider, api_key_env, base_url) = if model_arg.contains("claude") {
-        (ProviderType::Anthropic, "ANTHROPIC_API_KEY".into(), String::new())
+        (
+            ProviderType::Anthropic,
+            "ANTHROPIC_API_KEY".into(),
+            String::new(),
+        )
     } else if model_arg.contains("grok") {
-        (ProviderType::OpenAi, "XAI_API_KEY".into(), "https://api.x.ai/v1".into())
+        (
+            ProviderType::OpenAi,
+            "XAI_API_KEY".into(),
+            "https://api.x.ai/v1".into(),
+        )
     } else {
         (ProviderType::OpenAi, "OPENAI_API_KEY".into(), String::new())
     };
@@ -590,7 +606,8 @@ async fn run_agent_turn(
     output_format: OutputFormat,
     post_tools_hooks: Vec<Arc<dyn rho_core::hooks::PostToolsHook>>,
 ) -> Vec<Message> {
-    let transform_messages = compact_threshold.map(|t| compaction::make_compaction_transform(t, None));
+    let transform_messages =
+        compact_threshold.map(|t| compaction::make_compaction_transform(t, None));
     let config = AgentLoopConfig {
         model,
         api_key,
@@ -622,10 +639,13 @@ async fn run_agent_turn(
                                 eprintln!("[session:{}]", session_id);
                             }
                             OutputFormat::StreamJson => {
-                                println!("{}", serde_json::json!({
-                                    "type": "session",
-                                    "session_id": session_id
-                                }));
+                                println!(
+                                    "{}",
+                                    serde_json::json!({
+                                        "type": "session",
+                                        "session_id": session_id
+                                    })
+                                );
                             }
                         }
                         *last_reported_session_id = Some(session_id);
@@ -704,10 +724,13 @@ async fn run_agent_turn(
             OutputFormat::StreamJson => match event {
                 AgentEvent::MessageUpdate { event, .. } => match event {
                     AssistantStreamEvent::TextDelta { delta, .. } => {
-                        println!("{}", serde_json::json!({
-                            "type": "text_delta",
-                            "text": delta
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type": "text_delta",
+                                "text": delta
+                            })
+                        );
                     }
                     _ => {}
                 },
@@ -721,12 +744,15 @@ async fn run_agent_turn(
                         Ok(s) => s,
                         Err(_) => String::new(),
                     };
-                    println!("{}", serde_json::json!({
-                        "type": "tool_start",
-                        "tool_name": tool_name,
-                        "tool_id": tool_call_id,
-                        "input_summary": input_summary
-                    }));
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type": "tool_start",
+                            "tool_name": tool_name,
+                            "tool_id": tool_call_id,
+                            "input_summary": input_summary
+                        })
+                    );
                 }
                 AgentEvent::ToolExecutionEnd {
                     tool_call_id,
@@ -734,38 +760,50 @@ async fn run_agent_turn(
                     is_error,
                     ..
                 } => {
-                    println!("{}", serde_json::json!({
-                        "type": "tool_result",
-                        "tool_name": tool_name,
-                        "tool_id": tool_call_id,
-                        "success": !is_error
-                    }));
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type": "tool_result",
+                            "tool_name": tool_name,
+                            "tool_id": tool_call_id,
+                            "success": !is_error
+                        })
+                    );
                 }
                 AgentEvent::PostToolsHookStart { hook_name } => {
-                    println!("{}", serde_json::json!({
-                        "type": "hook_start",
-                        "hook_name": hook_name
-                    }));
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type": "hook_start",
+                            "hook_name": hook_name
+                        })
+                    );
                 }
                 AgentEvent::PostToolsHookEnd {
                     hook_name,
                     success,
                     summary,
                 } => {
-                    println!("{}", serde_json::json!({
-                        "type": "hook_result",
-                        "hook_name": hook_name,
-                        "success": success,
-                        "summary": summary
-                    }));
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type": "hook_result",
+                            "hook_name": hook_name,
+                            "success": success,
+                            "summary": summary
+                        })
+                    );
                 }
                 AgentEvent::AgentEnd { messages } => {
                     let sid = last_reported_session_id.clone().unwrap_or_default();
-                    println!("{}", serde_json::json!({
-                        "type": "complete",
-                        "success": true,
-                        "session_id": sid
-                    }));
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "type": "complete",
+                            "success": true,
+                            "session_id": sid
+                        })
+                    );
                     final_messages = messages;
                 }
                 _ => {}
@@ -791,24 +829,20 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Auth { command }) => {
             match command {
-                AuthCommands::Login => {
-                    match rho_core::auth::oauth::login().await {
-                        Ok(_) => eprintln!("Login successful."),
-                        Err(e) => {
-                            eprintln!("Login failed: {e}");
-                            std::process::exit(1);
-                        }
+                AuthCommands::Login => match rho_core::auth::oauth::login().await {
+                    Ok(_) => eprintln!("Login successful."),
+                    Err(e) => {
+                        eprintln!("Login failed: {e}");
+                        std::process::exit(1);
                     }
-                }
-                AuthCommands::Token => {
-                    match rho_core::auth::get_token() {
-                        Ok(token) => print!("{token}"),
-                        Err(e) => {
-                            eprintln!("Error: {e}");
-                            std::process::exit(1);
-                        }
+                },
+                AuthCommands::Token => match rho_core::auth::get_token() {
+                    Ok(token) => print!("{token}"),
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        std::process::exit(1);
                     }
-                }
+                },
                 AuthCommands::Xai { headless } => {
                     let result = if headless {
                         run_xai_device_flow().await
@@ -817,9 +851,10 @@ async fn main() -> Result<()> {
                     };
                     match result {
                         Ok(label) => {
-                            eprintln!("xAI authentication successful{}.", label
-                                .map(|l| format!(" ({})", l))
-                                .unwrap_or_default());
+                            eprintln!(
+                                "xAI authentication successful{}.",
+                                label.map(|l| format!(" ({})", l)).unwrap_or_default()
+                            );
                         }
                         Err(e) => {
                             eprintln!("xAI authentication failed: {e}");
@@ -923,7 +958,9 @@ async fn main() -> Result<()> {
                 model_config,
                 api_key: resolved_api_key,
                 system_prompt: build_system_prompt(&cwd, &project_config, None),
-                tools_factory: Arc::new(move || build_tools(&cwd_for_tools, &allowed_tools, &project_config_for_tools)),
+                tools_factory: Arc::new(move || {
+                    build_tools(&cwd_for_tools, &allowed_tools, &project_config_for_tools)
+                }),
                 thinking: thinking_level,
                 bearer_token,
                 compact_threshold: project_config.compact_threshold,
@@ -1089,7 +1126,8 @@ async fn main() -> Result<()> {
                 - Update autoresearch.md with your strategy notes\n\
                 - If all viable optimizations are exhausted, write \"EXHAUSTED\" to .stop";
 
-            let system_prompt = build_system_prompt(&cwd, &project_config, Some(autoresearch_system_append));
+            let system_prompt =
+                build_system_prompt(&cwd, &project_config, Some(autoresearch_system_append));
 
             let cancel = CancellationToken::new();
             let cancel_clone = cancel.clone();
@@ -1148,7 +1186,10 @@ async fn main() -> Result<()> {
                 ModelsCommands::List => {
                     let registry = ModelRegistry::load();
                     let models = registry.list();
-                    eprintln!("{:<24} {:<16} {:<32} {}", "ID", "PROVIDER", "MODEL ID", "STATUS");
+                    eprintln!(
+                        "{:<24} {:<16} {:<32} {}",
+                        "ID", "PROVIDER", "MODEL ID", "STATUS"
+                    );
                     eprintln!("{}", "-".repeat(90));
                     for m in models {
                         let status = if ModelRegistry::resolve_api_key(m).is_ok() {
@@ -1162,7 +1203,10 @@ async fn main() -> Result<()> {
                             ProviderType::XaiResponses => "xai-responses",
                             ProviderType::LlamaCpp => "llama-cpp",
                         };
-                        eprintln!("{:<24} {:<16} {:<32} {}", m.id, provider, m.model_id, status);
+                        eprintln!(
+                            "{:<24} {:<16} {:<32} {}",
+                            m.id, provider, m.model_id, status
+                        );
                     }
                 }
                 ModelsCommands::Setup { model } => {
@@ -1172,7 +1216,10 @@ async fn main() -> Result<()> {
 
                     let template: LocalModelTemplate = match model {
                         Some(ref name) => {
-                            match catalog.iter().find(|t| t.id == name || t.ollama_tag == name) {
+                            match catalog
+                                .iter()
+                                .find(|t| t.id == name || t.ollama_tag == name)
+                            {
                                 Some(t) => t.clone(),
                                 None => {
                                     eprintln!("Unknown model '{}'. Available models:", name);
@@ -1215,8 +1262,10 @@ async fn main() -> Result<()> {
                     }
 
                     // Pull the model
-                    eprintln!("  Pulling {} ({}), this may take a while...\n",
-                        template.ollama_tag, template.size_hint);
+                    eprintln!(
+                        "  Pulling {} ({}), this may take a while...\n",
+                        template.ollama_tag, template.size_hint
+                    );
 
                     let pull_status = std::process::Command::new("ollama")
                         .args(["pull", template.ollama_tag])
@@ -1252,8 +1301,8 @@ async fn main() -> Result<()> {
                 }
                 ModelsCommands::Running => {
                     use rho_provider::llama_cpp::LlamaCppManager;
-                    let running = LlamaCppManager::list_running()
-                        .context("failed to scan ~/.rho/run")?;
+                    let running =
+                        LlamaCppManager::list_running().context("failed to scan ~/.rho/run")?;
                     if running.is_empty() {
                         eprintln!("No llama.cpp servers are currently running.");
                     } else {
@@ -1398,8 +1447,9 @@ async fn main() -> Result<()> {
 
             // Load pre-seeded messages from context file (cache-optimized subagent forking)
             if let Some(ref context_path) = cli.context_file {
-                let content = std::fs::read_to_string(context_path)
-                    .with_context(|| format!("Failed to read context file: {}", context_path.display()))?;
+                let content = std::fs::read_to_string(context_path).with_context(|| {
+                    format!("Failed to read context file: {}", context_path.display())
+                })?;
                 history = serde_json::from_str(&content)
                     .with_context(|| "Failed to parse context file as JSON array of messages")?;
             }
@@ -1444,10 +1494,13 @@ async fn main() -> Result<()> {
                         eprintln!("[session:{}]", id);
                     }
                     OutputFormat::StreamJson => {
-                        println!("{}", serde_json::json!({
-                            "type": "session",
-                            "session_id": id
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type": "session",
+                                "session_id": id
+                            })
+                        );
                     }
                 }
                 last_reported_session_id = Some(id.clone());

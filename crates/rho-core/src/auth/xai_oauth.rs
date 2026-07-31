@@ -162,7 +162,9 @@ impl LoopbackHandle {
         let timeout = Duration::from_secs(CALLBACK_TIMEOUT_SECS);
         let (code, returned_state) = tokio::time::timeout(timeout, accept_callback(&self.listener))
             .await
-            .map_err(|_| AuthError::OAuthError("OAuth callback timed out after 5 minutes".into()))??;
+            .map_err(|_| {
+                AuthError::OAuthError("OAuth callback timed out after 5 minutes".into())
+            })??;
 
         if returned_state.as_deref() != Some(self.state.as_str()) {
             return Err(AuthError::OAuthError(
@@ -177,9 +179,7 @@ impl LoopbackHandle {
     }
 }
 
-async fn accept_callback(
-    listener: &TcpListener,
-) -> Result<(String, Option<String>), AuthError> {
+async fn accept_callback(listener: &TcpListener) -> Result<(String, Option<String>), AuthError> {
     loop {
         let (mut socket, _addr) = listener
             .accept()
@@ -211,7 +211,9 @@ async fn accept_callback(
 
         if path != OAUTH_REDIRECT_PATH {
             // Ignore stray probes like favicon.ico hits.
-            let _ = socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n").await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                .await;
             continue;
         }
 
@@ -228,11 +230,7 @@ async fn accept_callback(
                 "code" => code = Some(value),
                 "state" => state = Some(value),
                 "error" => error = Some(value),
-                "error_description" => {
-                    if error.is_none() {
-                        error = Some(value)
-                    }
-                }
+                "error_description" if error.is_none() => error = Some(value),
                 _ => {}
             }
         }
@@ -377,7 +375,9 @@ pub async fn request_device_code() -> Result<DeviceFlowStart, AuthError> {
             .interval
             .unwrap_or(DEVICE_POLL_DEFAULT_INTERVAL_SECS)
             .max(DEVICE_POLL_MIN_INTERVAL_SECS),
-        expires_in_secs: parsed.expires_in.unwrap_or(DEVICE_FLOW_DEFAULT_EXPIRES_SECS),
+        expires_in_secs: parsed
+            .expires_in
+            .unwrap_or(DEVICE_FLOW_DEFAULT_EXPIRES_SECS),
     })
 }
 
@@ -438,9 +438,7 @@ pub async fn device_poll_once(device_code: &str) -> DevicePollOutcome {
                     err.error_description.unwrap_or_else(|| err.error.clone()),
                 ),
             },
-            Err(_) => {
-                DevicePollOutcome::Failed(format!("device poll returned {status}: {text}"))
-            }
+            Err(_) => DevicePollOutcome::Failed(format!("device poll returned {status}: {text}")),
         }
     }
 }
@@ -500,10 +498,14 @@ pub fn get_token() -> Result<String, AuthError> {
             let refreshed = run_blocking(async move { refresh_tokens(&rt).await });
             match refreshed {
                 Ok(new_creds) => {
-                    let preserved_refresh =
-                        new_creds.refresh_token.clone().or(creds.refresh_token.clone());
-                    let preserved_label =
-                        new_creds.account_label.clone().or(creds.account_label.clone());
+                    let preserved_refresh = new_creds
+                        .refresh_token
+                        .clone()
+                        .or(creds.refresh_token.clone());
+                    let preserved_label = new_creds
+                        .account_label
+                        .clone()
+                        .or(creds.account_label.clone());
                     let new_creds = OAuthCredentials {
                         access_token: new_creds.access_token,
                         refresh_token: preserved_refresh,

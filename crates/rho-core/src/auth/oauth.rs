@@ -71,10 +71,7 @@ pub async fn exchange_code(
         .map_err(|e| AuthError::OAuthError(format!("token request failed: {e}")))?;
 
     if !resp.status().is_success() {
-        let text = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "unknown error".into());
+        let text = resp.text().await.unwrap_or_else(|_| "unknown error".into());
         return Err(AuthError::OAuthError(format!(
             "token exchange failed: {text}"
         )));
@@ -85,9 +82,7 @@ pub async fn exchange_code(
         .await
         .map_err(|e| AuthError::OAuthError(format!("failed to parse token response: {e}")))?;
 
-    let expires_at = data
-        .expires_in
-        .map(|secs| epoch_secs() + secs - 300); // 5 minute buffer
+    let expires_at = data.expires_in.map(|secs| epoch_secs() + secs - 300); // 5 minute buffer
 
     Ok(OAuthCredentials {
         access_token: data.access_token,

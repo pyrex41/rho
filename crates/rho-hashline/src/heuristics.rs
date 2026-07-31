@@ -36,9 +36,7 @@ fn strip_all_whitespace(s: &str) -> String {
 }
 
 fn leading_whitespace(s: &str) -> &str {
-    let end = s
-        .find(|c: char| !c.is_whitespace())
-        .unwrap_or(s.len());
+    let end = s.find(|c: char| !c.is_whitespace()).unwrap_or(s.len());
     &s[..end]
 }
 
@@ -64,7 +62,9 @@ fn strip_trailing_continuation_tokens(s: &str) -> String {
 }
 
 fn strip_merge_operator_chars(s: &str) -> String {
-    s.chars().filter(|c| !matches!(c, '|' | '&' | '?')).collect()
+    s.chars()
+        .filter(|c| !matches!(c, '|' | '&' | '?'))
+        .collect()
 }
 
 // ─── Heuristic 1: Strip hashline prefixes ───
@@ -110,10 +110,7 @@ pub fn strip_diff_plus_markers(lines: &[String]) -> Vec<String> {
         return lines.to_vec();
     }
 
-    let plus_count = non_empty
-        .iter()
-        .filter(|l| has_diff_plus_prefix(l))
-        .count();
+    let plus_count = non_empty.iter().filter(|l| has_diff_plus_prefix(l)).count();
 
     if plus_count > 0 && plus_count * 2 >= non_empty.len() {
         lines.iter().map(|l| strip_diff_plus(l)).collect()
@@ -133,10 +130,7 @@ pub fn strip_new_line_prefixes(lines: &[String]) -> Vec<String> {
         .iter()
         .filter(|l| HASHLINE_PREFIX_RE.is_match(l))
         .count();
-    let diff_count = non_empty
-        .iter()
-        .filter(|l| has_diff_plus_prefix(l))
-        .count();
+    let diff_count = non_empty.iter().filter(|l| has_diff_plus_prefix(l)).count();
 
     let strip_hash = hash_count > 0 && hash_count * 2 >= non_empty.len();
     let strip_plus = !strip_hash && diff_count > 0 && diff_count * 2 >= non_empty.len();
@@ -189,9 +183,12 @@ pub fn strip_range_boundary_echo(
     let mut out = dst_lines.to_vec();
 
     // Check if first line echoes the line before the range
-    let before_idx = if start_line >= 2 { start_line - 2 } else { usize::MAX };
-    if before_idx < file_lines.len()
-        && equals_ignoring_whitespace(&out[0], file_lines[before_idx])
+    let before_idx = if start_line >= 2 {
+        start_line - 2
+    } else {
+        usize::MAX
+    };
+    if before_idx < file_lines.len() && equals_ignoring_whitespace(&out[0], file_lines[before_idx])
     {
         out = out[1..].to_vec();
     }
@@ -261,7 +258,9 @@ pub fn restore_old_wrapped_lines(old_lines: &[&str], new_lines: &[String]) -> Ve
     let mut canon_to_old: HashMap<String, (String, usize)> = HashMap::new();
     for line in old_lines {
         let canon = strip_all_whitespace(line);
-        let entry = canon_to_old.entry(canon).or_insert_with(|| (line.to_string(), 0));
+        let entry = canon_to_old
+            .entry(canon)
+            .or_insert_with(|| (line.to_string(), 0));
         entry.1 += 1;
     }
 
@@ -313,10 +312,13 @@ pub fn restore_old_wrapped_lines(old_lines: &[&str], new_lines: &[String]) -> Ve
     }
 
     // Apply back-to-front
-    candidates.sort_by(|a, b| b.start.cmp(&a.start));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.start));
     let mut out = new_lines.to_vec();
     for c in &candidates {
-        out.splice(c.start..c.start + c.len, std::iter::once(c.replacement.clone()));
+        out.splice(
+            c.start..c.start + c.len,
+            std::iter::once(c.replacement.clone()),
+        );
     }
     out
 }
@@ -406,7 +408,10 @@ pub fn normalize_confusable_hyphens(s: &str) -> String {
 
 /// Normalize confusable hyphens in all lines.
 pub fn normalize_confusable_hyphens_in_lines(lines: &[String]) -> Vec<String> {
-    lines.iter().map(|l| normalize_confusable_hyphens(l)).collect()
+    lines
+        .iter()
+        .map(|l| normalize_confusable_hyphens(l))
+        .collect()
 }
 
 /// Check if any line contains a confusable hyphen.
@@ -452,10 +457,7 @@ mod tests {
 
     #[test]
     fn test_strip_diff_plus_fires() {
-        let lines = vec![
-            "+const x = 1;".to_string(),
-            "+const y = 2;".to_string(),
-        ];
+        let lines = vec!["+const x = 1;".to_string(), "+const y = 2;".to_string()];
         let result = strip_diff_plus_markers(&lines);
         assert_eq!(result, vec!["const x = 1;", "const y = 2;"]);
     }
@@ -499,10 +501,7 @@ mod tests {
     #[test]
     fn test_strip_insert_anchor_echo_no_match() {
         let anchor = "function hello() {";
-        let dst = vec![
-            "  return true;".to_string(),
-            "}".to_string(),
-        ];
+        let dst = vec!["  return true;".to_string(), "}".to_string()];
         let result = strip_insert_anchor_echo(anchor, &dst);
         assert_eq!(result, dst);
     }
@@ -518,10 +517,10 @@ mod tests {
     #[test]
     fn test_strip_range_boundary_echo() {
         let file_lines = vec![
-            "before",       // 0
-            "line 1",       // 1 (start_line=2)
-            "line 2",       // 2 (end_line=3)
-            "after",        // 3
+            "before", // 0
+            "line 1", // 1 (start_line=2)
+            "line 2", // 2 (end_line=3)
+            "after",  // 3
         ];
         let dst = vec![
             "before".to_string(),
@@ -602,9 +601,9 @@ mod tests {
     #[test]
     fn test_merge_detection_next_line() {
         let file_lines = vec![
-            "if (condition &&",     // line 1, continuation
-            "    other_thing) {",   // line 2
-            "  body;",              // line 3
+            "if (condition &&",   // line 1, continuation
+            "    other_thing) {", // line 2
+            "  body;",            // line 3
         ];
         let touched = std::collections::HashSet::new();
         let dst = vec!["if (condition && other_thing) {".to_string()];
@@ -617,11 +616,7 @@ mod tests {
 
     #[test]
     fn test_merge_detection_touched_line_skipped() {
-        let file_lines = vec![
-            "if (condition &&",
-            "    other_thing) {",
-            "  body;",
-        ];
+        let file_lines = vec!["if (condition &&", "    other_thing) {", "  body;"];
         let mut touched = std::collections::HashSet::new();
         touched.insert(2); // next line is touched
         let dst = vec!["if (condition && other_thing) {".to_string()];
@@ -647,10 +642,7 @@ mod tests {
 
     #[test]
     fn test_normalize_hyphens_in_lines() {
-        let lines = vec![
-            "first\u{2010}line".to_string(),
-            "second-line".to_string(),
-        ];
+        let lines = vec!["first\u{2010}line".to_string(), "second-line".to_string()];
         let result = normalize_confusable_hyphens_in_lines(&lines);
         assert_eq!(result, vec!["first-line", "second-line"]);
     }
@@ -666,10 +658,7 @@ mod tests {
     #[test]
     fn test_strip_new_line_prefixes_hashline_priority() {
         // When both hashline and diff-plus are present, hashline wins
-        let lines = vec![
-            "1:ab|+line".to_string(),
-            "2:cd|+other".to_string(),
-        ];
+        let lines = vec!["1:ab|+line".to_string(), "2:cd|+other".to_string()];
         let result = strip_new_line_prefixes(&lines);
         assert_eq!(result, vec!["+line", "+other"]);
     }

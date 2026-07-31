@@ -1,5 +1,9 @@
 use crate::types::{Content, Message, Model, UserContent};
 
+/// Message transformation used by the agent loop before a provider request.
+pub type MessageTransform =
+    dyn Fn(&[Message], &Model) -> (Vec<Message>, Option<CompactionResult>) + Send + Sync;
+
 /// Estimate token count using chars/4 heuristic.
 pub fn estimate_tokens(messages: &[Message]) -> usize {
     let mut chars = 0;
@@ -82,7 +86,7 @@ pub fn prune_tool_outputs(messages: &[Message], keep_recent: usize) -> Vec<Messa
 pub fn make_compaction_transform(
     threshold: f64,
     session_memory_path: Option<std::path::PathBuf>,
-) -> Box<dyn Fn(&[Message], &Model) -> (Vec<Message>, Option<CompactionResult>) + Send + Sync> {
+) -> Box<MessageTransform> {
     Box::new(move |messages: &[Message], model: &Model| {
         let estimated = estimate_tokens(messages);
         let limit = (threshold * model.context_window as f64) as usize;
@@ -293,19 +297,22 @@ mod tests {
         // First 3 messages are in prune zone
         match &pruned[1] {
             Message::ToolResult { content, .. } => {
-                assert_eq!(content[0], Content::Text { text: "[pruned]".into() });
+                assert_eq!(
+                    content[0],
+                    Content::Text {
+                        text: "[pruned]".into()
+                    }
+                );
             }
             _ => panic!("expected tool result"),
         }
 
         // Last 3 messages kept intact
         match &pruned[4] {
-            Message::ToolResult { content, .. } => {
-                match &content[0] {
-                    Content::Text { text } => assert_eq!(text, "more content"),
-                    _ => panic!("expected text"),
-                }
-            }
+            Message::ToolResult { content, .. } => match &content[0] {
+                Content::Text { text } => assert_eq!(text, "more content"),
+                _ => panic!("expected text"),
+            },
             _ => panic!("expected tool result"),
         }
     }

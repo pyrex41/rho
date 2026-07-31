@@ -103,10 +103,7 @@ fn walk_and_match(
             continue;
         }
 
-        let is_dir = entry
-            .file_type()
-            .map(|ft| ft.is_dir())
-            .unwrap_or(false);
+        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
 
         let mtime = entry.metadata().ok().and_then(|m| m.modified().ok());
 
@@ -251,9 +248,10 @@ impl AgentTool for FindTool {
             ))),
             Err(_timeout) => {
                 // Timeout — try to return a helpful message
-                Err(ToolError::ExecutionFailed(
-                    format!("find timed out after {}s searching for pattern: {pattern}", FIND_TIMEOUT.as_secs()),
-                ))
+                Err(ToolError::ExecutionFailed(format!(
+                    "find timed out after {}s searching for pattern: {pattern}",
+                    FIND_TIMEOUT.as_secs()
+                )))
             }
         }
     }
@@ -281,10 +279,7 @@ mod tests {
         assert_eq!(parse_base_dir("**/*.rs"), (".", "**/*.rs"));
         assert_eq!(parse_base_dir("Cargo.toml"), (".", "Cargo.toml"));
         assert_eq!(parse_base_dir("src/lib.rs"), ("src", "lib.rs"));
-        assert_eq!(
-            parse_base_dir("a/b/c/**/*.ts"),
-            ("a/b/c", "**/*.ts")
-        );
+        assert_eq!(parse_base_dir("a/b/c/**/*.ts"), ("a/b/c", "**/*.ts"));
         assert_eq!(parse_base_dir("*.rs"), (".", "*.rs"));
     }
 
@@ -307,7 +302,10 @@ mod tests {
         let text = extract_text(&result);
         assert!(text.contains("src/main.rs"), "got: {text}");
         assert!(text.contains("src/lib.rs"), "got: {text}");
-        assert!(!text.contains("README.md"), "should not include .md: {text}");
+        assert!(
+            !text.contains("README.md"),
+            "should not include .md: {text}"
+        );
     }
 
     #[tokio::test]
@@ -336,7 +334,10 @@ mod tests {
 
         let text = extract_text(&result);
         assert!(text.contains("visible.rs"), "got: {text}");
-        assert!(!text.contains("secret.rs"), "gitignored file should not appear: {text}");
+        assert!(
+            !text.contains("secret.rs"),
+            "gitignored file should not appear: {text}"
+        );
     }
 
     #[tokio::test]
@@ -360,8 +361,14 @@ mod tests {
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
         // Most recent first
-        assert!(lines[0].contains("new.rs"), "newest should be first, got: {text}");
-        assert!(lines[1].contains("old.rs"), "oldest should be last, got: {text}");
+        assert!(
+            lines[0].contains("new.rs"),
+            "newest should be first, got: {text}"
+        );
+        assert!(
+            lines[1].contains("old.rs"),
+            "oldest should be last, got: {text}"
+        );
     }
 
     #[tokio::test]
@@ -475,6 +482,9 @@ mod tests {
 
         let text = extract_text(&result);
         assert!(text.contains("src/app.ts"), "got: {text}");
-        assert!(!text.contains("util.ts"), "should not include lib files: {text}");
+        assert!(
+            !text.contains("util.ts"),
+            "should not include lib files: {text}"
+        );
     }
 }

@@ -89,7 +89,10 @@ pub fn is_improvement(new_val: f64, best_val: f64, direction: MetricDirection) -
     }
 }
 
-pub fn best_metric(entries: &[ExperimentEntry], direction: MetricDirection) -> Option<(f64, usize)> {
+pub fn best_metric(
+    entries: &[ExperimentEntry],
+    direction: MetricDirection,
+) -> Option<(f64, usize)> {
     entries
         .iter()
         .filter_map(|e| e.metric_value.map(|v| (v, e.iteration)))
@@ -134,18 +137,22 @@ pub fn append_experiment_entry(cwd: &Path, entry: &ExperimentEntry) -> Result<()
 
 // === Session markdown ===
 
-pub fn generate_session_md(
-    config: &AutoresearchConfig,
-    entries: &[ExperimentEntry],
-) -> String {
+pub fn generate_session_md(config: &AutoresearchConfig, entries: &[ExperimentEntry]) -> String {
     let mut md = String::new();
 
     md.push_str("# Autoresearch Session\n\n");
 
     // Config summary
     md.push_str("## Configuration\n\n");
-    md.push_str(&format!("- **Metric**: {} ({} is better)\n", config.metric_name, config.direction.label()));
-    md.push_str(&format!("- **Benchmark**: `{}`\n", config.benchmark_command));
+    md.push_str(&format!(
+        "- **Metric**: {} ({} is better)\n",
+        config.metric_name,
+        config.direction.label()
+    ));
+    md.push_str(&format!(
+        "- **Benchmark**: `{}`\n",
+        config.benchmark_command
+    ));
     if let Some(ref checks) = config.checks_command {
         md.push_str(&format!("- **Checks**: `{}`\n", checks));
     }
@@ -158,11 +165,17 @@ pub fn generate_session_md(
     if let Some((best_val, best_iter)) = best_metric(entries, config.direction) {
         let baseline = entries.first().and_then(|e| e.metric_value);
         md.push_str("## Best Result\n\n");
-        md.push_str(&format!("- **Best**: {:.4} {} (iteration {})\n", best_val, config.metric_name, best_iter));
+        md.push_str(&format!(
+            "- **Best**: {:.4} {} (iteration {})\n",
+            best_val, config.metric_name, best_iter
+        ));
         if let Some(base) = baseline {
             if base != 0.0 {
                 let pct = ((best_val - base) / base.abs()) * 100.0;
-                md.push_str(&format!("- **Baseline**: {:.4} {}\n", base, config.metric_name));
+                md.push_str(&format!(
+                    "- **Baseline**: {:.4} {}\n",
+                    base, config.metric_name
+                ));
                 md.push_str(&format!("- **Improvement**: {:.1}%\n", pct.abs()));
             }
         }
@@ -175,7 +188,10 @@ pub fn generate_session_md(
         md.push_str("| # | Description | Value | Status | Commit |\n");
         md.push_str("|---|-------------|-------|--------|--------|\n");
         for e in entries {
-            let val = e.metric_value.map(|v| format!("{:.4}", v)).unwrap_or_else(|| "-".into());
+            let val = e
+                .metric_value
+                .map(|v| format!("{:.4}", v))
+                .unwrap_or_else(|| "-".into());
             let commit = e.commit.as_deref().unwrap_or("-");
             md.push_str(&format!(
                 "| {} | {} | {} | {} | {} |\n",
@@ -192,7 +208,9 @@ pub fn generate_session_md(
     // Sections for the agent to maintain
     md.push_str("## Strategies Tried\n\n<!-- Agent: update this section with strategies you've attempted -->\n\n");
     md.push_str("## Dead Ends\n\n<!-- Agent: note approaches that didn't work and why -->\n\n");
-    md.push_str("## Notes\n\n<!-- Agent: any observations about the codebase or metric behavior -->\n\n");
+    md.push_str(
+        "## Notes\n\n<!-- Agent: any observations about the codebase or metric behavior -->\n\n",
+    );
 
     md
 }
@@ -355,7 +373,11 @@ async fn run_benchmark(
         Ok(Ok(output)) => {
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                anyhow::bail!("Benchmark failed (exit {}): {}", output.status, stderr.chars().take(500).collect::<String>());
+                anyhow::bail!(
+                    "Benchmark failed (exit {}): {}",
+                    output.status,
+                    stderr.chars().take(500).collect::<String>()
+                );
             }
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr_str = String::from_utf8_lossy(&output.stderr);
@@ -395,7 +417,10 @@ fn build_autoresearch_prompt(
         config.metric_name,
         config.direction.label()
     ));
-    prompt.push_str(&format!("Benchmark command: `{}`\n", config.benchmark_command));
+    prompt.push_str(&format!(
+        "Benchmark command: `{}`\n",
+        config.benchmark_command
+    ));
     if let Some(ref checks) = config.checks_command {
         prompt.push_str(&format!("Checks command: `{}`\n", checks));
     }
@@ -429,7 +454,10 @@ fn build_autoresearch_prompt(
         prompt.push_str("| # | Description | Value | Status |\n");
         prompt.push_str("|---|-------------|-------|--------|\n");
         for e in &recent {
-            let val = e.metric_value.map(|v| format!("{:.4}", v)).unwrap_or_else(|| "-".into());
+            let val = e
+                .metric_value
+                .map(|v| format!("{:.4}", v))
+                .unwrap_or_else(|| "-".into());
             prompt.push_str(&format!(
                 "| {} | {} | {} | {} |\n",
                 e.iteration,
@@ -443,12 +471,17 @@ fn build_autoresearch_prompt(
 
     prompt.push_str(&format!("## Your Task (Iteration {})\n\n", iteration));
     prompt.push_str("1. Analyze experiment history and identify promising strategies\n");
-    prompt.push_str(&format!("2. Generate a hypothesis for what might improve {}\n", config.metric_name));
+    prompt.push_str(&format!(
+        "2. Generate a hypothesis for what might improve {}\n",
+        config.metric_name
+    ));
     prompt.push_str("3. Implement ONE focused change using the available tools\n");
-    prompt.push_str("4. Update \"Strategies Tried\" or \"Dead Ends\" sections in autoresearch.md\n");
+    prompt
+        .push_str("4. Update \"Strategies Tried\" or \"Dead Ends\" sections in autoresearch.md\n");
     prompt.push_str("5. Do NOT run the benchmark -- the system runs it after you finish\n");
     prompt.push_str("6. Do NOT run git commit/add/push -- the system handles git\n");
-    prompt.push_str("7. If all viable optimizations are exhausted, write \"EXHAUSTED\" to .stop\n\n");
+    prompt
+        .push_str("7. If all viable optimizations are exhausted, write \"EXHAUSTED\" to .stop\n\n");
     prompt.push_str("Explain what you changed and why in your final message.\n");
 
     prompt
@@ -505,9 +538,7 @@ pub async fn run_autoresearch(config: AutoresearchConfig, cancel: CancellationTo
                 let effective_metric = metric_value.or(Some(wall_clock_ms as f64));
                 eprintln!(
                     "[autoresearch] Baseline: {:?} {} ({}ms)",
-                    effective_metric,
-                    config.metric_name,
-                    wall_clock_ms
+                    effective_metric, config.metric_name, wall_clock_ms
                 );
                 emit_json!({
                     "type": "baseline",
@@ -532,7 +563,10 @@ pub async fn run_autoresearch(config: AutoresearchConfig, cancel: CancellationTo
                 write_session_md(&config.cwd, &md)?;
             }
             Err(e) => {
-                anyhow::bail!("Baseline benchmark failed: {}. Fix the benchmark command and retry.", e);
+                anyhow::bail!(
+                    "Baseline benchmark failed: {}. Fix the benchmark command and retry.",
+                    e
+                );
             }
         }
     } else {
@@ -615,12 +649,18 @@ pub async fn run_autoresearch(config: AutoresearchConfig, cancel: CancellationTo
         while let Some(event) = consumer.next().await {
             if json {
                 match event {
-                    AgentEvent::MessageUpdate { event: AssistantStreamEvent::TextDelta { delta, .. }, .. } => {
+                    AgentEvent::MessageUpdate {
+                        event: AssistantStreamEvent::TextDelta { delta, .. },
+                        ..
+                    } => {
                         agent_description.push_str(&delta);
-                        println!("{}", serde_json::json!({
-                            "type": "text_delta",
-                            "text": delta
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type": "text_delta",
+                                "text": delta
+                            })
+                        );
                     }
                     AgentEvent::ToolExecutionStart {
                         tool_call_id,
@@ -632,12 +672,15 @@ pub async fn run_autoresearch(config: AutoresearchConfig, cancel: CancellationTo
                             Ok(s) => s,
                             Err(_) => String::new(),
                         };
-                        println!("{}", serde_json::json!({
-                            "type": "tool_start",
-                            "tool_name": tool_name,
-                            "tool_id": tool_call_id,
-                            "input_summary": input_summary
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type": "tool_start",
+                                "tool_name": tool_name,
+                                "tool_id": tool_call_id,
+                                "input_summary": input_summary
+                            })
+                        );
                     }
                     AgentEvent::ToolExecutionEnd {
                         tool_call_id,
@@ -645,19 +688,25 @@ pub async fn run_autoresearch(config: AutoresearchConfig, cancel: CancellationTo
                         is_error,
                         ..
                     } => {
-                        println!("{}", serde_json::json!({
-                            "type": "tool_result",
-                            "tool_name": tool_name,
-                            "tool_id": tool_call_id,
-                            "success": !is_error
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type": "tool_result",
+                                "tool_name": tool_name,
+                                "tool_id": tool_call_id,
+                                "success": !is_error
+                            })
+                        );
                     }
                     AgentEvent::AgentEnd { .. } => {}
                     _ => {}
                 }
             } else {
                 match event {
-                    AgentEvent::MessageUpdate { event: AssistantStreamEvent::TextDelta { delta, .. }, .. } => {
+                    AgentEvent::MessageUpdate {
+                        event: AssistantStreamEvent::TextDelta { delta, .. },
+                        ..
+                    } => {
                         agent_description.push_str(&delta);
                         eprint!("{}", delta);
                     }
@@ -781,7 +830,10 @@ pub async fn run_autoresearch(config: AutoresearchConfig, cancel: CancellationTo
         }
 
         // Run benchmark
-        eprintln!("[autoresearch] Running benchmark: {}", config.benchmark_command);
+        eprintln!(
+            "[autoresearch] Running benchmark: {}",
+            config.benchmark_command
+        );
         emit_json!({"type": "benchmark_start"});
 
         match run_benchmark(
@@ -814,7 +866,9 @@ pub async fn run_autoresearch(config: AutoresearchConfig, cancel: CancellationTo
                 // Compare to best
                 let current_best = best_metric(&entries, config.direction);
                 let is_better = match (effective_metric, current_best) {
-                    (Some(new_val), Some((best_val, _))) => is_improvement(new_val, best_val, config.direction),
+                    (Some(new_val), Some((best_val, _))) => {
+                        is_improvement(new_val, best_val, config.direction)
+                    }
                     (Some(_), None) => true,
                     _ => false,
                 };
@@ -828,10 +882,7 @@ pub async fn run_autoresearch(config: AutoresearchConfig, cancel: CancellationTo
                         description.chars().take(80).collect::<String>()
                     );
                     let commit_hash = git_commit_changes(&config.cwd, &commit_msg)?;
-                    eprintln!(
-                        "[autoresearch] IMPROVED! Committed as {:?}",
-                        commit_hash
-                    );
+                    eprintln!("[autoresearch] IMPROVED! Committed as {:?}", commit_hash);
 
                     let entry = ExperimentEntry {
                         iteration,
@@ -930,7 +981,10 @@ pub async fn run_autoresearch(config: AutoresearchConfig, cancel: CancellationTo
             "total_iterations": total_iterations
         });
     } else {
-        eprintln!("\n[autoresearch] Done. {} iterations completed.", total_iterations);
+        eprintln!(
+            "\n[autoresearch] Done. {} iterations completed.",
+            total_iterations
+        );
         emit_json!({
             "type": "autoresearch_done",
             "total_iterations": total_iterations
@@ -1087,15 +1141,19 @@ mod tests {
             commit: None,
         };
         append_experiment_entry(dir.path(), &entry).unwrap();
-        append_experiment_entry(dir.path(), &ExperimentEntry {
-            iteration: 1,
-            timestamp: "2026-01-01T00:01:00Z".into(),
-            description: "second".into(),
-            metric_value: Some(40.0),
-            wall_clock_ms: 900,
-            status: "improved".into(),
-            commit: Some("abc1234".into()),
-        }).unwrap();
+        append_experiment_entry(
+            dir.path(),
+            &ExperimentEntry {
+                iteration: 1,
+                timestamp: "2026-01-01T00:01:00Z".into(),
+                description: "second".into(),
+                metric_value: Some(40.0),
+                wall_clock_ms: 900,
+                status: "improved".into(),
+                commit: Some("abc1234".into()),
+            },
+        )
+        .unwrap();
 
         let entries = read_experiment_log(dir.path());
         assert_eq!(entries.len(), 2);
@@ -1169,8 +1227,14 @@ mod tests {
         assert_eq!(MetricDirection::from_str("lower"), MetricDirection::Lower);
         assert_eq!(MetricDirection::from_str("higher"), MetricDirection::Higher);
         assert_eq!(MetricDirection::from_str("up"), MetricDirection::Higher);
-        assert_eq!(MetricDirection::from_str("maximize"), MetricDirection::Higher);
-        assert_eq!(MetricDirection::from_str("anything"), MetricDirection::Lower);
+        assert_eq!(
+            MetricDirection::from_str("maximize"),
+            MetricDirection::Higher
+        );
+        assert_eq!(
+            MetricDirection::from_str("anything"),
+            MetricDirection::Lower
+        );
     }
 
     #[test]

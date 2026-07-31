@@ -178,7 +178,8 @@ mod tests {
         let path = dir.join("credentials.json");
         fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
 
-        let read: CredentialsFile = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let read: CredentialsFile =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         let got = read.providers.get("xai").unwrap();
         assert_eq!(got.access_token, "tok");
         assert_eq!(got.refresh_token.as_deref(), Some("rt"));

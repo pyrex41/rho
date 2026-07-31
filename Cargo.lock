@@ -3676,6 +3676,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rho-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rho-provider"
 version = "0.8.4"
 dependencies = [

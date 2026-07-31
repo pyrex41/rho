@@ -288,10 +288,13 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
                 match event {
                     AgentEvent::MessageUpdate { event, .. } => {
                         if let AssistantStreamEvent::TextDelta { delta, .. } = event {
-                            println!("{}", serde_json::json!({
-                                "type": "text_delta",
-                                "text": delta
-                            }));
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "type": "text_delta",
+                                    "text": delta
+                                })
+                            );
                         }
                     }
                     AgentEvent::ToolExecutionStart {
@@ -304,12 +307,15 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
                             Ok(s) => s,
                             Err(_) => String::new(),
                         };
-                        println!("{}", serde_json::json!({
-                            "type": "tool_start",
-                            "tool_name": tool_name,
-                            "tool_id": tool_call_id,
-                            "input_summary": input_summary
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type": "tool_start",
+                                "tool_name": tool_name,
+                                "tool_id": tool_call_id,
+                                "input_summary": input_summary
+                            })
+                        );
                     }
                     AgentEvent::ToolExecutionEnd {
                         tool_call_id,
@@ -317,30 +323,39 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
                         is_error,
                         ..
                     } => {
-                        println!("{}", serde_json::json!({
-                            "type": "tool_result",
-                            "tool_name": tool_name,
-                            "tool_id": tool_call_id,
-                            "success": !is_error
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type": "tool_result",
+                                "tool_name": tool_name,
+                                "tool_id": tool_call_id,
+                                "success": !is_error
+                            })
+                        );
                     }
                     AgentEvent::PostToolsHookStart { hook_name } => {
-                        println!("{}", serde_json::json!({
-                            "type": "hook_start",
-                            "hook_name": hook_name
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type": "hook_start",
+                                "hook_name": hook_name
+                            })
+                        );
                     }
                     AgentEvent::PostToolsHookEnd {
                         hook_name,
                         success,
                         summary,
                     } => {
-                        println!("{}", serde_json::json!({
-                            "type": "hook_result",
-                            "hook_name": hook_name,
-                            "success": success,
-                            "summary": summary
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type": "hook_result",
+                                "hook_name": hook_name,
+                                "success": success,
+                                "summary": summary
+                            })
+                        );
                         iteration_hook_results.push(HookSummary {
                             name: hook_name,
                             success,
@@ -352,11 +367,14 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
                         compacted_estimate,
                         ..
                     } => {
-                        println!("{}", serde_json::json!({
-                            "type": "context_compacted",
-                            "original_estimate": original_estimate,
-                            "compacted_estimate": compacted_estimate
-                        }));
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "type": "context_compacted",
+                                "original_estimate": original_estimate,
+                                "compacted_estimate": compacted_estimate
+                            })
+                        );
                     }
                     AgentEvent::AgentEnd { .. } => {}
                     _ => {}
@@ -522,10 +540,7 @@ pub async fn run_loop(config: LoopConfig, cancel: CancellationToken) -> anyhow::
         // Sleep between iterations
         if iteration < config.max_iterations {
             let sleep_secs = config.sleep_between.as_secs();
-            eprintln!(
-                "[loop] Sleeping {}s before next iteration...",
-                sleep_secs
-            );
+            eprintln!("[loop] Sleeping {}s before next iteration...", sleep_secs);
             emit_json!({"type": "loop_sleep", "seconds": sleep_secs});
             tokio::select! {
                 _ = tokio::time::sleep(config.sleep_between) => {},

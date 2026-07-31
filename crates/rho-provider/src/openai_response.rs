@@ -87,10 +87,7 @@ impl OpenAiResponseHandler {
             .and_then(|v| v.as_array())
         {
             for tc in tool_calls {
-                let index = tc
-                    .get("index")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as usize;
+                let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
                 // New tool call: has an id field
                 if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
@@ -104,7 +101,8 @@ impl OpenAiResponseHandler {
                 }
 
                 // Arguments fragment
-                if let Some(args_delta) = tc.pointer("/function/arguments").and_then(|v| v.as_str()) {
+                if let Some(args_delta) = tc.pointer("/function/arguments").and_then(|v| v.as_str())
+                {
                     if let Some(acc) = self.tool_call_accumulators.get_mut(&index) {
                         acc.2.push_str(args_delta);
                         events.push(AssistantStreamEvent::ToolCallDelta {
@@ -162,7 +160,11 @@ impl OpenAiResponseHandler {
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
             events.push(AssistantStreamEvent::ToolCallEnd {
                 index: idx,
-                tool_call: Content::ToolCall { id, name, arguments },
+                tool_call: Content::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                },
             });
         }
 
@@ -187,8 +189,8 @@ impl OpenAiResponseHandler {
         indices.sort_unstable();
         for idx in indices {
             let (id, name, args_str) = &self.tool_call_accumulators[&idx];
-            let arguments =
-                serde_json::from_str(args_str).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+            let arguments = serde_json::from_str(args_str)
+                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
             content.push(Content::ToolCall {
                 id: id.clone(),
                 name: name.clone(),
@@ -290,8 +292,12 @@ mod tests {
         let mut handler = OpenAiResponseHandler::new();
 
         let events = handler.handle_chunk(&text_chunk("Hello"));
-        assert!(events.iter().any(|e| matches!(e, AssistantStreamEvent::Start)));
-        assert!(events.iter().any(|e| matches!(e, AssistantStreamEvent::TextStart { index: 0 })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::Start)));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::TextStart { index: 0 })));
         assert!(events.iter().any(|e| matches!(
             e,
             AssistantStreamEvent::TextDelta { index: 0, delta } if delta == "Hello"
@@ -299,8 +305,12 @@ mod tests {
 
         let events2 = handler.handle_chunk(&text_chunk(", world"));
         // Start and TextStart should not repeat
-        assert!(!events2.iter().any(|e| matches!(e, AssistantStreamEvent::Start)));
-        assert!(!events2.iter().any(|e| matches!(e, AssistantStreamEvent::TextStart { index: 0 })));
+        assert!(!events2
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::Start)));
+        assert!(!events2
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::TextStart { index: 0 })));
         assert!(events2.iter().any(|e| matches!(
             e,
             AssistantStreamEvent::TextDelta { index: 0, delta } if delta == ", world"
@@ -308,15 +318,23 @@ mod tests {
 
         // finish_reason only records stop_reason — no end events yet
         let events3 = handler.handle_chunk(&finish_chunk("stop"));
-        assert!(!events3.iter().any(|e| matches!(e, AssistantStreamEvent::TextEnd { .. })));
-        assert!(!events3.iter().any(|e| matches!(e, AssistantStreamEvent::Done { .. })));
+        assert!(!events3
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::TextEnd { .. })));
+        assert!(!events3
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::Done { .. })));
 
         // flush() (called on [DONE]) emits the end events
         let flush_events = handler.flush();
-        assert!(flush_events.iter().any(|e| matches!(e, AssistantStreamEvent::TextEnd { index: 0, .. })));
+        assert!(flush_events
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::TextEnd { index: 0, .. })));
         assert!(flush_events.iter().any(|e| matches!(
             e,
-            AssistantStreamEvent::Done { stop_reason: StopReason::Stop }
+            AssistantStreamEvent::Done {
+                stop_reason: StopReason::Stop
+            }
         )));
     }
 
@@ -325,24 +343,28 @@ mod tests {
         let mut handler = OpenAiResponseHandler::new();
 
         let events1 = handler.handle_chunk(&tool_start_chunk(0, "call_abc", "bash"));
-        assert!(events1.iter().any(|e| matches!(e, AssistantStreamEvent::ToolCallStart { index: 0 })));
+        assert!(events1
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::ToolCallStart { index: 0 })));
 
         let events2 = handler.handle_chunk(&tool_args_chunk(0, r#"{"command":"#));
-        assert!(events2.iter().any(|e| matches!(
-            e,
-            AssistantStreamEvent::ToolCallDelta { index: 0, .. }
-        )));
+        assert!(events2
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::ToolCallDelta { index: 0, .. })));
 
         let events3 = handler.handle_chunk(&tool_args_chunk(0, r#""ls"}"#));
-        assert!(events3.iter().any(|e| matches!(
-            e,
-            AssistantStreamEvent::ToolCallDelta { index: 0, .. }
-        )));
+        assert!(events3
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::ToolCallDelta { index: 0, .. })));
 
         // finish_reason only records stop_reason — end events come from flush()
         let events4 = handler.handle_chunk(&finish_chunk("tool_calls"));
-        assert!(!events4.iter().any(|e| matches!(e, AssistantStreamEvent::ToolCallEnd { .. })));
-        assert!(!events4.iter().any(|e| matches!(e, AssistantStreamEvent::Done { .. })));
+        assert!(!events4
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::ToolCallEnd { .. })));
+        assert!(!events4
+            .iter()
+            .any(|e| matches!(e, AssistantStreamEvent::Done { .. })));
 
         let flush_events = handler.flush();
         let end_event = flush_events
@@ -352,7 +374,12 @@ mod tests {
 
         if let AssistantStreamEvent::ToolCallEnd { index, tool_call } = end_event {
             assert_eq!(*index, 0);
-            if let Content::ToolCall { id, name, arguments } = tool_call {
+            if let Content::ToolCall {
+                id,
+                name,
+                arguments,
+            } = tool_call
+            {
                 assert_eq!(id, "call_abc");
                 assert_eq!(name, "bash");
                 assert_eq!(arguments["command"], "ls");
@@ -363,7 +390,9 @@ mod tests {
 
         assert!(flush_events.iter().any(|e| matches!(
             e,
-            AssistantStreamEvent::Done { stop_reason: StopReason::ToolUse }
+            AssistantStreamEvent::Done {
+                stop_reason: StopReason::ToolUse
+            }
         )));
     }
 
@@ -386,13 +415,21 @@ mod tests {
         assert_eq!(tool_ends.len(), 2);
 
         // Should be sorted by index
-        if let AssistantStreamEvent::ToolCallEnd { index: i0, tool_call: tc0 } = &tool_ends[0] {
+        if let AssistantStreamEvent::ToolCallEnd {
+            index: i0,
+            tool_call: tc0,
+        } = &tool_ends[0]
+        {
             assert_eq!(*i0, 0);
             if let Content::ToolCall { name, .. } = tc0 {
                 assert_eq!(name, "read");
             }
         }
-        if let AssistantStreamEvent::ToolCallEnd { index: i1, tool_call: tc1 } = &tool_ends[1] {
+        if let AssistantStreamEvent::ToolCallEnd {
+            index: i1,
+            tool_call: tc1,
+        } = &tool_ends[1]
+        {
             assert_eq!(*i1, 1);
             if let Content::ToolCall { name, .. } = tc1 {
                 assert_eq!(name, "bash");
@@ -433,7 +470,12 @@ mod tests {
         handler.handle_chunk(&finish_chunk("stop"));
 
         let msg = handler.build_final_message();
-        if let Message::Assistant { content, stop_reason, .. } = msg {
+        if let Message::Assistant {
+            content,
+            stop_reason,
+            ..
+        } = msg
+        {
             assert_eq!(content.len(), 1);
             if let Content::Text { text } = &content[0] {
                 assert_eq!(text, "Hello world");

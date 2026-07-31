@@ -1,8 +1,11 @@
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use tokio::sync::{mpsc, oneshot};
 use futures::Stream;
 use std::pin::Pin;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::task::{Context, Poll};
+use tokio::sync::{mpsc, oneshot};
 
 // === Producer / Consumer (from split) ===
 
