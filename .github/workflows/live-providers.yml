@@ -1,0 +1,52 @@
+name: Live provider smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 7 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-provider-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    environment: live-providers
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: anthropic
+            model: claude-haiku
+            credential: ANTHROPIC_API_KEY
+          - provider: openai
+            model: gpt-5.4-nano
+            credential: OPENAI_API_KEY
+          - provider: xai
+            model: grok-3-mini
+            credential: XAI_API_KEY
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --bin rho-cli
+      - name: Run bounded sentinel
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          PROVIDER: ${{ matrix.provider }}
+          MODEL: ${{ matrix.model }}
+          CREDENTIAL: ${{ matrix.credential }}
+          RHO_PROTOCOL_GRANT_MODE: off
+          RHO_PROTOCOL_CREDENTIAL_MODE: require
+        run: |
+          test -n "${!CREDENTIAL}"
+          jq -n --arg provider "$PROVIDER" --arg model "$MODEL" --arg credential "$CREDENTIAL" '{protocol:"rho.run/v1",run_id:("live-"+$provider),model:{provider:$provider,id:$model},input:[{role:"user",content:[{type:"text",text:"Reply with exactly RHO_LIVE_OK"}]}],limits:{max_turns:1,max_output_tokens:32,max_cost_micros:20000},grant:{grant_id:("live-"+$provider),expires_at:"2099-01-01T00:00:00Z",providers:[$provider],models:[$model],tools:[],read_roots:[],write_roots:[],network:{mode:"provider_only"}},credential_ref:("env:"+$credential)}' > request.json
+          ./target/debug/rho-cli run --request-file request.json --events jsonl | tee events.jsonl
+          grep -q 'RHO_LIVE_OK' events.jsonl
+          test "$(grep -Ec '"type":"run.(completed|failed|cancelled)"' events.jsonl)" -eq 1
+          grep -q '"type":"run.completed"' events.jsonl
