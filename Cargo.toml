@@ -40,6 +40,8 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 cap-std = "4"
 sha2 = "0.10"
+k256 = { version = "0.13", features = ["schnorr"] }
+hex = "0.4"
 regex = { workspace = true }
 serde = { workspace = true }
 indicatif = "0.17"

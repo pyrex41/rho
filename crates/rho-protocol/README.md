@@ -54,10 +54,13 @@ behavior without a warning, and `require` fails closed with a typed
 `RHO_PROTOCOL_CREDENTIAL_MODE=require` before relying on request-scoped
 authority.
 
-`grant.witness` authenticates the complete request as
+`grant.witness` authenticates the complete request as either
+`bip340-sha256:<128 lowercase hex signature>` or the migration-compatible
 `hmac-sha256:<lowercase hex>`, calculated over canonical JSON (recursively
 sorted object keys, compact separators) with `grant.witness` omitted. The
-runner reads the key only from `RHO_PROTOCOL_GRANT_KEY` and exposes an
+managed verifier reads its trusted x-only public key from
+`RHO_PROTOCOL_GRANT_PUBKEY`; the legacy verifier reads its shared key from
+`RHO_PROTOCOL_GRANT_KEY`. The runner exposes an
 `off|warn|require` rollout through `RHO_PROTOCOL_GRANT_MODE` (default `warn`).
 A present but invalid witness is always denied; `require` also denies a missing
 witness before provider resolution or any tool effect.
@@ -70,9 +73,9 @@ the later effect outside a granted root. Recursive `grep` and `find` fail
 closed until their walkers are capability-relative as well.
 File tools therefore fail closed on non-Unix platforms, where the current
 adapter cannot hand an already-open descriptor to the existing tool
-implementation. The signing key is shared with the trusted runner process; it
-protects request files from substitution by a less-privileged party, not from
-a compromised runner that already possesses the enforcement secret.
+implementation. With BIP340 the worker receives only the issuer public key, so
+it cannot mint new authority. HMAC remains available for compatibility and has
+the weaker shared-secret trust model.
 
 ## Rho CLI provider mapping
 

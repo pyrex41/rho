@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use k256::schnorr::{signature::Verifier, Signature, VerifyingKey};
 use rho_core::agent_loop::{agent_loop, AgentLoopConfig};
 use rho_core::config::ProjectConfig;
 use rho_core::models::{ModelConfig, ModelRegistry, ProviderType};
@@ -460,6 +461,11 @@ fn verify_grant_witness_with_key(
             GrantWitnessMode::Off => Ok(()),
         };
     };
+    if let Some(supplied) = witness.strip_prefix("bip340-sha256:") {
+        let public_key = std::env::var("RHO_PROTOCOL_GRANT_PUBKEY")
+            .map_err(|_| "RHO_PROTOCOL_GRANT_PUBKEY is unavailable".to_string())?;
+        return verify_bip340_witness(request, supplied, &public_key);
+    }
     let supplied = witness
         .strip_prefix("hmac-sha256:")
         .ok_or_else(|| "grant witness uses an unsupported scheme".to_string())?;
@@ -481,6 +487,25 @@ fn verify_grant_witness_with_key(
         return Err("grant witness does not authenticate this request".into());
     }
     Ok(())
+}
+
+fn verify_bip340_witness(
+    request: &protocol::RunRequest,
+    supplied: &str,
+    public_key: &str,
+) -> Result<(), String> {
+    let public_key =
+        hex::decode(public_key).map_err(|_| "RHO_PROTOCOL_GRANT_PUBKEY is not hex".to_string())?;
+    let verifying_key = VerifyingKey::from_bytes(&public_key)
+        .map_err(|_| "RHO_PROTOCOL_GRANT_PUBKEY is invalid".to_string())?;
+    let signature_bytes =
+        hex::decode(supplied).map_err(|_| "grant witness signature is not hex".to_string())?;
+    let signature = Signature::try_from(signature_bytes.as_slice())
+        .map_err(|_| "grant witness signature is invalid".to_string())?;
+    let digest = Sha256::digest(canonical_unsigned_request(request)?);
+    verifying_key
+        .verify(&digest, &signature)
+        .map_err(|_| "grant witness does not authenticate this request".to_string())
 }
 
 fn validate_supported_tools(request: &protocol::RunRequest) -> Result<(), String> {
@@ -1055,6 +1080,7 @@ impl Emitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k256::schnorr::{signature::Signer, SigningKey};
 
     fn hosted_request(provider: &str, model: &str) -> protocol::RunRequest {
         protocol::RunRequest::new(
@@ -1295,6 +1321,45 @@ mod tests {
                 .unwrap_err()
                 .contains("does not authenticate")
         );
+    }
+
+    #[test]
+    fn bip340_grant_witness_binds_the_entire_request() {
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]).unwrap();
+        let public_key = hex::encode(signing_key.verifying_key().to_bytes());
+        let mut request = hosted_request("anthropic", "claude-test");
+        let digest = Sha256::digest(canonical_unsigned_request(&request).unwrap());
+        let signature: Signature = signing_key.sign(&digest);
+        request.grant.witness = Some(format!(
+            "bip340-sha256:{}",
+            hex::encode(signature.to_bytes())
+        ));
+        assert!(verify_bip340_witness(
+            &request,
+            request
+                .grant
+                .witness
+                .as_deref()
+                .unwrap()
+                .strip_prefix("bip340-sha256:")
+                .unwrap(),
+            &public_key,
+        )
+        .is_ok());
+
+        request.run_id.push_str("-substituted");
+        assert!(verify_bip340_witness(
+            &request,
+            request
+                .grant
+                .witness
+                .as_deref()
+                .unwrap()
+                .strip_prefix("bip340-sha256:")
+                .unwrap(),
+            &public_key,
+        )
+        .is_err());
     }
 
     #[test]
