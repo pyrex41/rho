@@ -1344,6 +1344,11 @@ mod tests {
         assert_eq!(grok.model_id, "grok-2-1212");
         assert_eq!(grok.provider, ProviderType::OpenAi);
         assert_eq!(grok.base_url, "https://api.x.ai/v1");
+
+        let grok_default = model_config(&hosted_request("xai", "grok-4.7"));
+        assert_eq!(grok_default.model_id, "grok-4.7");
+        assert_eq!(grok_default.provider, ProviderType::OpenAi);
+        assert_eq!(grok_default.base_url, "https://api.x.ai/v1");
     }
 
     #[test]

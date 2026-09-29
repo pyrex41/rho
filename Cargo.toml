@@ -12,7 +12,7 @@ resolver = "2"
 
 [package]
 name = "rho-agent"
-version = "0.8.4"
+version = "0.8.5"
 edition = "2021"
 description = "AI coding agent with file tools"
 license = "MIT"

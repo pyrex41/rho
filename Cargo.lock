@@ -3675,7 +3675,7 @@ dependencies = [
 
 [[package]]
 name = "rho-agent"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3703,7 +3703,7 @@ dependencies = [
 
 [[package]]
 name = "rho-core"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "async-trait",
  "base64",
@@ -3728,7 +3728,7 @@ dependencies = [
 
 [[package]]
 name = "rho-gui"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "chrono",
  "dirs",
@@ -3746,7 +3746,7 @@ dependencies = [
 
 [[package]]
 name = "rho-hashline"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "regex",
  "serde",
@@ -3765,7 +3765,7 @@ dependencies = [
 
 [[package]]
 name = "rho-provider"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3786,7 +3786,7 @@ dependencies = [
 
 [[package]]
 name = "rho-server"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3806,7 +3806,7 @@ dependencies = [
 
 [[package]]
 name = "rho-tools"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "async-trait",

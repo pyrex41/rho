@@ -287,7 +287,7 @@ impl RhoApp {
         let preferred_model_id = project_config
             .model
             .as_deref()
-            .unwrap_or("claude-sonnet")
+            .unwrap_or("grok-4.7")
             .to_string();
         let thinking = project_config.thinking.unwrap_or(ThinkingLevel::Off);
 
@@ -702,7 +702,7 @@ impl RhoApp {
                     .as_ref()
                     .and_then(|p| std::fs::read_to_string(p).ok())
                     .unwrap_or_else(|| {
-                        "---\n# model: claude-sonnet\n# thinking: off\n# memories: true\n---\n\n\
+                        "---\n# model: grok-4.7\n# thinking: off\n# memories: true\n---\n\n\
                         # Project Instructions\n\nAdd your project-specific instructions here.\n"
                             .to_string()
                     });
