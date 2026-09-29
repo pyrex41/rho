@@ -88,7 +88,7 @@ their granular policies are implemented.
 
 `model.provider` uses the stable names `anthropic`, `openai`, or `xai`.
 `model.id` may be either a documented Rho alias (for example
-`claude-sonnet`, `gpt-5.4`, or `grok-2`) or a raw provider model ID. Aliases
+`grok-4.7`, `claude-sonnet`, or `gpt-5.4`) or a raw provider model ID. Aliases
 resolve to their provider wire IDs and configured endpoint; raw IDs use that
 provider's default endpoint. Credentials are resolved without entering the
 event stream:
@@ -106,7 +106,7 @@ falls back from one provider's credential to another provider.
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--model <ID>` | Model registry ID or raw model ID | `claude-sonnet` |
+| `--model <ID>` | Model registry ID or raw model ID | `grok-4.7` |
 | `--thinking <LEVEL>` | Thinking level: off, minimal, low, medium, high | `off` |
 | `--show-thinking` | Display thinking output on stderr | |
 | `--api-key <KEY>` | Override API key | env var / keychain |
@@ -203,7 +203,7 @@ rho-cli autoresearch \
 ## Supported models
 
 ### Anthropic Claude
-- `claude-sonnet` — Claude Sonnet 4.6 (default)
+- `claude-sonnet` — Claude Sonnet 4.6
 - `claude-opus` — Claude Opus 4.6 (with extended thinking)
 - `claude-haiku` — Claude Haiku 4.5
 
@@ -213,6 +213,8 @@ rho-cli autoresearch \
 - `gpt-5.4-nano` — Efficient for high-volume tasks
 
 ### xAI Grok
+- `grok-4.7` — Grok 4.7 (default)
+- `grok-4.3`, `grok-build-0.1`
 - `grok-3`, `grok-3-mini`, `grok-2`
 - `grok-4.20-reasoning`, `grok-4.20-non-reasoning` (experimental)
 - `grok-4.20-multi-agent` (multi-agent responses endpoint)
@@ -268,7 +270,7 @@ Create a `RHO.md` (or `CLAUDE.md`) in your project root:
 
 ```markdown
 ---
-model: claude-sonnet
+model: grok-4.7
 thinking: high
 memories: true
 compact_threshold: 0.7

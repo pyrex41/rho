@@ -477,7 +477,19 @@ fn built_in_models() -> Vec<ModelConfig> {
             server_tools: None,
             llama_cpp: None,
         },
-        // xAI Grok 4.3 — smart default, and Grok Build 0.1 — fast default
+        // xAI Grok 4.7 — default, Grok 4.3, and Grok Build 0.1 — fast
+        ModelConfig {
+            id: "grok-4.7".into(),
+            provider: ProviderType::OpenAi,
+            model_id: "grok-4.7".into(),
+            base_url: "https://api.x.ai/v1".into(),
+            api_key_env: Some("XAI_API_KEY".into()),
+            context_window: 131_072,
+            max_tokens: 16_384,
+            thinking: true,
+            server_tools: None,
+            llama_cpp: None,
+        },
         ModelConfig {
             id: "grok-4.3".into(),
             provider: ProviderType::OpenAi,
@@ -745,7 +757,7 @@ mod tests {
         let registry = ModelRegistry::new();
         // Guard the provider families users rely on without making every model
         // catalog addition require updating a brittle total-count assertion.
-        for id in ["claude-sonnet", "gpt-5.4", "grok-3"] {
+        for id in ["claude-sonnet", "gpt-5.4", "grok-3", "grok-4.7"] {
             assert!(registry.get(id).is_some(), "missing built-in model {id}");
         }
     }
@@ -767,6 +779,17 @@ mod tests {
         assert_eq!(m.model_id, "claude-sonnet-4-6");
         assert_eq!(m.provider, ProviderType::Anthropic);
         assert!(!m.thinking);
+    }
+
+    #[test]
+    fn grok_47_is_registered_as_xai_default() {
+        let registry = ModelRegistry::new();
+        let m = registry.get("grok-4.7").unwrap();
+        assert_eq!(m.model_id, "grok-4.7");
+        assert_eq!(m.provider, ProviderType::OpenAi);
+        assert_eq!(m.base_url, "https://api.x.ai/v1");
+        assert_eq!(m.api_key_env.as_deref(), Some("XAI_API_KEY"));
+        assert!(m.thinking);
     }
 
     #[test]

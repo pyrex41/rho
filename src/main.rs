@@ -60,8 +60,8 @@ struct Cli {
     )]
     prompt: Option<String>,
 
-    /// Model ID to use (registry ID like "claude-sonnet", or raw model ID)
-    #[arg(long, default_value = "claude-sonnet")]
+    /// Model ID to use (registry ID like "grok-4.7", or raw model ID)
+    #[arg(long, default_value = "grok-4.7")]
     model: String,
 
     /// Thinking level (off, minimal, low, medium, high)
@@ -950,7 +950,7 @@ async fn main() -> Result<()> {
 
             let model_id = model
                 .or(project_config.model.clone())
-                .unwrap_or_else(|| "claude-sonnet".into());
+                .unwrap_or_else(|| "grok-4.7".into());
             let thinking_str = thinking.unwrap_or_else(|| {
                 project_config
                     .thinking
@@ -1010,7 +1010,7 @@ async fn main() -> Result<()> {
 
             let model_id = model
                 .or(project_config.model.clone())
-                .unwrap_or_else(|| "claude-sonnet".into());
+                .unwrap_or_else(|| "grok-4.7".into());
             let thinking_str = thinking.unwrap_or_else(|| {
                 project_config
                     .thinking
@@ -1113,7 +1113,7 @@ async fn main() -> Result<()> {
 
             let model_id = model
                 .or(project_config.model.clone())
-                .unwrap_or_else(|| "claude-sonnet".into());
+                .unwrap_or_else(|| "grok-4.7".into());
             let thinking_str = thinking.unwrap_or_else(|| {
                 project_config
                     .thinking
